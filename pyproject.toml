@@ -27,6 +27,20 @@ dev = [
 [tool.hatch.build.targets.wheel]
 packages = ["src/bonsai"]
 
+[tool.hatch.build.targets.sdist]
+include = [
+  "/src",
+  "/tests",
+  "/README.md",
+  "/LICENSE",
+  "/pyproject.toml",
+]
+exclude = [
+  "/.git",
+  "/.worktrees",
+  "/docs",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
