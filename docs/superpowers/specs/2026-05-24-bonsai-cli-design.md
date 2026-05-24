@@ -45,24 +45,26 @@ Example:
 bonsai clone git@github.com:org/authentic.git authentic
 ```
 
-Expected layout:
+Expected layout for a repository whose default branch is `main`:
 
 ```text
 ~/Projects/authentic/
-  authentic-main/
+  main/
   Caddyfile
   caddy.d/
   .bonsai/
     state.json
 ```
 
+If the remote default branch is `staging`, the initial checkout directory is `staging` instead.
+
 The command:
 
 1. verifies macOS prerequisites
 2. installs Caddy with Homebrew if possible and missing
-3. clones the repository into `<name>-main`
-4. reads `<name>-main/.bonsai.toml`
-5. validates that `main_worktree` is absent or matches `<name>-main`
+3. discovers the remote default branch with `git ls-remote --symref <git-url> HEAD`
+4. clones the repository into a directory named after that default branch
+5. reads `<default-branch>/.bonsai.toml`
 6. writes a managed root `Caddyfile`
 7. starts or reloads Caddy where possible
 8. records workspace metadata in `.bonsai/state.json`
@@ -84,7 +86,7 @@ The command:
 
 1. locates the managed workspace from the current directory
 2. fetches `origin`
-3. creates a worktree for an existing remote branch, or creates a new branch from the configured base branch
+3. creates a worktree for an existing remote branch, or creates a new branch from the configured base branch, falling back to the discovered default branch when `base_branch` is omitted
 4. symlinks configured shared files such as `.env`
 5. allocates the lowest available slot
 6. computes service ports from each service `base_port + slot`
@@ -122,7 +124,7 @@ Default mode is dry-run. `--apply` removes worktrees.
 
 Safety rules:
 
-- never remove the main worktree
+- never remove the default-branch worktree
 - skip dirty worktrees unless an explicit force flag is provided
 - skip branches without a merged pull request
 - tear down configured Docker Compose projects before removing a worktree when possible
@@ -151,8 +153,9 @@ Example:
 
 ```toml
 name = "authentic"
+
+# Optional. If omitted, Bonsai uses the remote default branch discovered during clone.
 base_branch = "main"
-main_worktree = "authentic-main"
 
 [workspace]
 default_parent = "~/Projects"
@@ -230,13 +233,14 @@ Supported v1 template variables:
 
 ## State
 
-Bonsai stores workspace-level state outside the main worktree:
+Bonsai stores workspace-level state outside the default-branch worktree:
 
 ```json
 {
   "version": 1,
   "name": "authentic",
-  "main_worktree": "authentic-main",
+  "default_branch": "main",
+  "default_worktree": "main",
   "repo_url": "git@github.com:org/authentic.git",
   "worktrees": {
     "MB-2036-multi-worktree-port-slots": {
@@ -307,6 +311,7 @@ Bonsai should fail before making changes when required inputs are invalid:
 - missing `.bonsai.toml`
 - malformed config
 - duplicate service names
+- unable to determine the remote default branch during `clone`
 - no primary public service when public services are configured
 - multiple primary public services
 - invalid URL templates
@@ -340,11 +345,11 @@ Unit tests should avoid invoking real Homebrew, Caddy, Docker, or GitHub. Integr
 
 The first implementation should preserve the useful behavior from the current `authentic` scripts:
 
-- slot 0 is effectively reserved for the main worktree
-- non-main worktrees use slots starting at 1
+- slot 0 is effectively reserved for the default-branch worktree
+- non-default worktrees use slots starting at 1
 - ports are calculated as `base_port + slot`
 - branch slugs are lowercase with unsupported URL characters replaced by `-`
-- `.env` can be symlinked from the main worktree
+- `.env` can be symlinked from the default-branch worktree
 - `.env.local` is generated per worktree
 - Caddy snippets live in `caddy.d`
 - cleanup is dry-run by default
