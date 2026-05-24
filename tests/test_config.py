@@ -91,6 +91,48 @@ def test_boolean_base_port_is_rejected(tmp_path: Path) -> None:
         load_config(write_config(tmp_path, text))
 
 
+def test_workspace_must_be_a_table(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace(
+        '[workspace]\ndefault_parent = "~/Projects"',
+        'workspace = "bad"',
+    )
+
+    with pytest.raises(BonsaiConfigError, match="Config key workspace must be a table"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_shared_files_must_contain_tables(tmp_path: Path) -> None:
+    text = """
+name = "authentic"
+base_branch = "main"
+shared_files = ["bad"]
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+"""
+
+    with pytest.raises(BonsaiConfigError, match="Config key shared_files must contain tables"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_caddy_boolean_values_must_be_booleans(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace("auto_install = true", 'auto_install = "false"')
+
+    with pytest.raises(BonsaiConfigError, match="Config key auto_install must be a boolean"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_caddy_string_values_must_be_strings(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace('snippets_dir = "caddy.d"', "snippets_dir = 123")
+
+    with pytest.raises(BonsaiConfigError, match="Config key snippets_dir must be a string"):
+        load_config(write_config(tmp_path, text))
+
+
 def test_duplicate_service_names_are_rejected(tmp_path: Path) -> None:
     text = VALID_CONFIG.replace('name = "api"', 'name = "frontend"')
 
@@ -144,7 +186,7 @@ def test_unsupported_shared_file_mode_is_rejected(tmp_path: Path) -> None:
                 'url = "https://${slug}.authentic.localhost"',
                 'url = ""',
             ),
-            "Optional string values must be non-empty strings",
+            "Config key url must be a non-empty string",
         ),
     ],
 )

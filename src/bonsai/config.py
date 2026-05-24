@@ -28,12 +28,12 @@ def load_config(path: Path) -> BonsaiConfig:
     config = BonsaiConfig(
         name=_require_str(raw, "name"),
         base_branch=_optional_str(raw, "base_branch"),
-        workspace=_workspace(raw.get("workspace", {})),
-        caddy=_caddy(raw.get("caddy", {})),
-        commands=_commands(raw.get("commands", {})),
-        shared_files=tuple(_shared_file(item) for item in raw.get("shared_files", [])),
-        env=tuple(_env(item) for item in raw.get("env", [])),
-        services=tuple(_service(item) for item in raw.get("services", [])),
+        workspace=_workspace(_optional_table(raw, "workspace")),
+        caddy=_caddy(_optional_table(raw, "caddy")),
+        commands=_commands(_optional_table(raw, "commands")),
+        shared_files=tuple(_shared_file(item) for item in _array_of_tables(raw, "shared_files")),
+        env=tuple(_env(item) for item in _array_of_tables(raw, "env")),
+        services=tuple(_service(item) for item in _array_of_tables(raw, "services")),
         path=path,
     )
     _validate(config)
@@ -47,33 +47,67 @@ def _require_str(raw: dict[str, Any], key: str) -> str:
     return value
 
 
-def _optional_str(raw: dict[str, Any], key: str) -> str | None:
+def _optional_str(raw: dict[str, Any], key: str, default: str | None = None) -> str | None:
     value = raw.get(key)
     if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
+        return default
+    if not isinstance(value, str):
+        raise BonsaiConfigError(f"Config key {key} must be a string")
+    if not value.strip():
         raise BonsaiConfigError(f"Config key {key} must be a non-empty string")
     return value
 
 
+def _table(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    value = raw.get(key)
+    if not isinstance(value, dict):
+        raise BonsaiConfigError(f"Config key {key} must be a table")
+    return value
+
+
+def _optional_table(raw: dict[str, Any], key: str) -> dict[str, Any]:
+    value = raw.get(key)
+    if value is None:
+        return {}
+    return _table(raw, key)
+
+
+def _array_of_tables(raw: dict[str, Any], key: str) -> list[dict[str, Any]]:
+    value = raw.get(key)
+    if value is None:
+        return []
+    if not isinstance(value, list) or not all(isinstance(item, dict) for item in value):
+        raise BonsaiConfigError(f"Config key {key} must contain tables")
+    return value
+
+
+def _optional_bool(raw: dict[str, Any], key: str, default: bool) -> bool:
+    value = raw.get(key)
+    if value is None:
+        return default
+    if not isinstance(value, bool):
+        raise BonsaiConfigError(f"Config key {key} must be a boolean")
+    return value
+
+
 def _workspace(raw: dict[str, Any]) -> WorkspaceConfig:
-    return WorkspaceConfig(default_parent=str(raw.get("default_parent", "~/Projects")))
+    return WorkspaceConfig(default_parent=_optional_str(raw, "default_parent", "~/Projects"))
 
 
 def _caddy(raw: dict[str, Any]) -> CaddyConfig:
     return CaddyConfig(
-        auto_install=bool(raw.get("auto_install", True)),
-        auto_start=bool(raw.get("auto_start", True)),
-        root_caddyfile=str(raw.get("root_caddyfile", "Caddyfile")),
-        snippets_dir=str(raw.get("snippets_dir", "caddy.d")),
+        auto_install=_optional_bool(raw, "auto_install", True),
+        auto_start=_optional_bool(raw, "auto_start", True),
+        root_caddyfile=_optional_str(raw, "root_caddyfile", "Caddyfile"),
+        snippets_dir=_optional_str(raw, "snippets_dir", "caddy.d"),
     )
 
 
 def _commands(raw: dict[str, Any]) -> CommandsConfig:
     return CommandsConfig(
-        install=_none_or_str(raw.get("install")),
-        start=_none_or_str(raw.get("start")),
-        migrate=_none_or_str(raw.get("migrate")),
+        install=_optional_str(raw, "install"),
+        start=_optional_str(raw, "start"),
+        migrate=_optional_str(raw, "migrate"),
     )
 
 
@@ -81,7 +115,7 @@ def _shared_file(raw: dict[str, Any]) -> SharedFileConfig:
     return SharedFileConfig(
         source=_require_str(raw, "source"),
         target=_require_str(raw, "target"),
-        mode=str(raw.get("mode", "symlink")),
+        mode=_optional_str(raw, "mode", "symlink"),
     )
 
 
@@ -94,9 +128,9 @@ def _service(raw: dict[str, Any]) -> ServiceConfig:
         name=_require_str(raw, "name"),
         port_env=_require_str(raw, "port_env"),
         base_port=_require_int(raw, "base_port"),
-        public=bool(raw.get("public", True)),
-        primary=bool(raw.get("primary", False)),
-        url=_none_or_str(raw.get("url")),
+        public=_optional_bool(raw, "public", True),
+        primary=_optional_bool(raw, "primary", False),
+        url=_optional_str(raw, "url"),
     )
 
 
@@ -104,14 +138,6 @@ def _require_int(raw: dict[str, Any], key: str) -> int:
     value = raw.get(key)
     if isinstance(value, bool) or not isinstance(value, int):
         raise BonsaiConfigError(f"Config key {key} must be an integer")
-    return value
-
-
-def _none_or_str(value: Any) -> str | None:
-    if value is None:
-        return None
-    if not isinstance(value, str) or not value.strip():
-        raise BonsaiConfigError("Optional string values must be non-empty strings")
     return value
 
 
