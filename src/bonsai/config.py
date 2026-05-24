@@ -102,7 +102,7 @@ def _service(raw: dict[str, Any]) -> ServiceConfig:
 
 def _require_int(raw: dict[str, Any], key: str) -> int:
     value = raw.get(key)
-    if not isinstance(value, int):
+    if isinstance(value, bool) or not isinstance(value, int):
         raise BonsaiConfigError(f"Config key {key} must be an integer")
     return value
 
