@@ -10,6 +10,20 @@ uv run bonsai --help
 uv run bonsai --version
 ```
 
+## Release
+
+Run the release script from a clean `main` checkout:
+
+```bash
+uv run python scripts/release.py 0.1.3 --dry-run
+uv run python scripts/release.py 0.1.3
+```
+
+The script updates the package version, commits `chore: release <version>`,
+tags and pushes `v<version>`, copies the formula to the `mggwxyz/homebrew-tap`
+checkout, commits the tap formula, and pushes the tap. Pass `--tap-repo` if the
+tap checkout is not discoverable through Homebrew.
+
 ## Homebrew Install
 
 ```bash
