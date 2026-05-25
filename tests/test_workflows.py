@@ -12,10 +12,10 @@ from bonsai.git import (
     parse_default_branch,
     remote_branch_exists,
 )
-from bonsai.models import BonsaiState, CommandResult, CommandSpec, ManagedWorktree
+from bonsai.models import BonsaiState, CommandResult, CommandSpec, FileWrite, ManagedWorktree
 from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
-from bonsai.workflows import plan_add_files, plan_clone_workspace
+from bonsai.workflows import plan_add_files, plan_clone_workspace, write_files
 
 
 def test_allocate_slot_uses_lowest_available_positive_integer() -> None:
@@ -309,3 +309,9 @@ def test_plan_add_files_rejects_branch_with_empty_slug(tmp_path: Path) -> None:
             workspace_root=tmp_path / "authentic",
             branch="???",
         )
+
+
+def test_write_files_creates_parent_directories(tmp_path: Path) -> None:
+    write_files((FileWrite(path=tmp_path / "a" / "b.txt", content="hello\n"),))
+
+    assert (tmp_path / "a" / "b.txt").read_text(encoding="utf-8") == "hello\n"

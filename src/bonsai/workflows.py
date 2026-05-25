@@ -8,10 +8,12 @@ from bonsai.models import (
     BonsaiConfig,
     BonsaiState,
     CloneWorkspacePlan,
+    CommandSpec,
     FileWrite,
     ManagedWorktree,
 )
 from bonsai.ports import allocate_slot
+from bonsai.process import Runner
 from bonsai.rendering import render_caddy_snippets, render_env_local, render_root_caddyfile
 from bonsai.slug import branch_slug
 from bonsai.state import update_worktree
@@ -101,3 +103,14 @@ def plan_add_files(
         files=tuple(files),
         updated_state=updated_state,
     )
+
+
+def write_files(files: tuple[FileWrite, ...]) -> None:
+    for file in files:
+        file.path.parent.mkdir(parents=True, exist_ok=True)
+        file.path.write_text(file.content, encoding="utf-8")
+
+
+def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
+    for command in commands:
+        runner.run(list(command.argv), cwd=command.cwd)

@@ -19,3 +19,23 @@ def test_help_lists_core_commands() -> None:
     assert "clone" in result.stdout
     assert "add" in result.stdout
     assert "doctor" in result.stdout
+
+
+def test_list_command_exists() -> None:
+    result = runner.invoke(app, ["list"])
+
+    assert result.exit_code == 0
+
+
+def test_sync_dry_run_command_exists() -> None:
+    result = runner.invoke(app, ["sync"])
+
+    assert result.exit_code == 0
+    assert "dry run" in result.stdout.lower()
+
+
+def test_cleanup_dry_run_command_exists() -> None:
+    result = runner.invoke(app, ["cleanup"])
+
+    assert result.exit_code == 0
+    assert "dry run" in result.stdout.lower()
