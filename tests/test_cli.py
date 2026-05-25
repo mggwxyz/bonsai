@@ -1,8 +1,10 @@
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+from rich.console import Console
 from typer.testing import CliRunner
 
 from bonsai import cli
@@ -423,6 +425,34 @@ def test_checkout_path_adds_missing_branch(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert result.stdout.strip() == str(tmp_path / "feature")
+    assert calls == [("feature", tmp_path)]
+
+
+def test_checkout_path_keeps_status_output_off_stdout(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+    monkeypatch.setenv("TERM", "xterm")
+
+    class StatusRunner(cli.SubprocessRunner):
+        def __init__(self) -> None:
+            super().__init__(
+                console=Console(stderr=True, force_terminal=True, color_system=None, width=120)
+            )
+
+    def fake_execute_checkout(runner_arg, name: str, root: Path):
+        calls.append((name, root))
+        runner_arg.run([sys.executable, "-c", "print('internal stdout')"])
+        return SimpleNamespace(worktree_path=root / "feature", created=True)
+
+    monkeypatch.setattr(cli, "SubprocessRunner", StatusRunner, raising=False)
+    monkeypatch.setattr(cli, "execute_checkout", fake_execute_checkout, raising=False)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "feature"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{tmp_path / 'feature'}\n"
+    assert "internal stdout" not in result.stdout
+    assert "Running" in result.stderr
     assert calls == [("feature", tmp_path)]
 
 
