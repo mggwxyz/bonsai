@@ -28,6 +28,12 @@ def test_render_template_rejects_unknown_values() -> None:
         render_template("${MISSING}", {})
 
 
+@pytest.mark.parametrize("template", ["${FRONTEND-PORT}", "${}"])
+def test_render_template_rejects_malformed_placeholders(template: str) -> None:
+    with pytest.raises(ValueError, match="Malformed template placeholder"):
+        render_template(template, {})
+
+
 def test_render_env_local_contains_slot_ports_and_env(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, VALID_CONFIG))
     env_text = render_env_local(
@@ -65,3 +71,15 @@ def test_render_caddy_snippets_only_public_services(tmp_path: Path) -> None:
     assert "reverse_proxy localhost:4202" in snippets["frontend"]
     assert "https://api-mb-2036-multi-worktree-port-slots.authentic.localhost" in snippets["api"]
     assert "reverse_proxy localhost:3335" in snippets["api"]
+
+
+def test_template_values_reject_service_port_env_collisions(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG.replace("FRONTEND_PORT", "slug", 1)))
+
+    with pytest.raises(ValueError, match="reserved template key: slug"):
+        render_env_local(
+            config=config,
+            branch="MB-2036-multi-worktree-port-slots",
+            slot=2,
+            worktree_path=tmp_path / "MB-2036-multi-worktree-port-slots",
+        )

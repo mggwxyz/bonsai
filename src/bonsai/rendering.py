@@ -6,8 +6,13 @@ from bonsai.models import BonsaiConfig
 from bonsai.slug import branch_slug
 from bonsai.templates import render_template
 
+RESERVED_TEMPLATE_KEYS = frozenset({"name", "branch", "slug", "slot", "WORKTREE_PATH"})
+
 
 def service_ports(config: BonsaiConfig, slot: int) -> dict[str, int]:
+    for service in config.services:
+        if service.port_env in RESERVED_TEMPLATE_KEYS:
+            raise ValueError(f"Service port_env uses reserved template key: {service.port_env}")
     return {service.port_env: service.base_port + slot for service in config.services}
 
 
