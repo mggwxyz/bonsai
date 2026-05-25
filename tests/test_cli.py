@@ -50,6 +50,7 @@ def test_help_lists_core_commands() -> None:
     assert "add" in result.stdout
     assert "remove" in result.stdout
     assert "checkout" in result.stdout
+    assert "open" in result.stdout
     assert "shell-init" in result.stdout
     assert "install-shell" in result.stdout
     assert "init" in result.stdout
@@ -329,6 +330,34 @@ def test_checkout_path_adds_missing_branch(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert result.stdout.strip() == str(tmp_path / "feature")
     assert calls == [("feature", tmp_path)]
+
+
+def test_open_opens_primary_url_for_current_worktree(monkeypatch, tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    config_path = tmp_path / "main" / ".bonsai.toml"
+    config_path.write_text(
+        """
+name = "authentic"
+base_branch = "main"
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+""",
+        encoding="utf-8",
+    )
+    opened_urls: list[str] = []
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open"])
+
+    assert result.exit_code == 0
+    assert opened_urls == ["https://ma-123-test.authentic.localhost"]
+    assert "Opened https://ma-123-test.authentic.localhost" in result.stdout
 
 
 def test_shell_init_zsh_prints_checkout_wrapper() -> None:

@@ -34,6 +34,7 @@ from bonsai.workflows import (
     execute_remove,
     plan_add_files,
     plan_clone_workspace,
+    plan_open_url,
     write_files,
 )
 
@@ -231,6 +232,65 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
     assert plan.symlinks[0].target == (
         tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots" / ".env"
     )
+
+
+def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "mb-2036-multi-worktree-port-slots"
+    nested_dir = branch_worktree / "src"
+    nested_dir.mkdir(parents=True)
+    default_worktree.mkdir()
+    config_text = VALID_CONFIG.replace(
+        'url = "https://${slug}.authentic.localhost"',
+        'url = "https://${slug}-${FRONTEND_PORT}.authentic.localhost"',
+        1,
+    )
+    write_config(default_worktree, config_text)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "MB-2036-multi-worktree-port-slots": ManagedWorktree(
+                    path="mb-2036-multi-worktree-port-slots",
+                    slug="mb-2036-multi-worktree-port-slots",
+                    slot=2,
+                )
+            },
+        ),
+    )
+
+    plan = plan_open_url(workspace_root, nested_dir)
+
+    assert plan.branch == "MB-2036-multi-worktree-port-slots"
+    assert plan.worktree_path == branch_worktree
+    assert plan.url == "https://mb-2036-multi-worktree-port-slots-4202.authentic.localhost"
+
+
+def test_plan_open_url_rejects_directory_outside_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Current directory is not inside"):
+        plan_open_url(workspace_root, workspace_root)
 
 
 def test_plan_clone_workspace_rejects_unsafe_workspace_name(tmp_path: Path) -> None:

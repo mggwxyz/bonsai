@@ -5,7 +5,7 @@ from collections.abc import Callable
 from pathlib import Path
 
 from bonsai.config import load_config
-from bonsai.errors import BonsaiWorkspaceError
+from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
     add_existing_worktree,
     add_new_worktree,
@@ -30,14 +30,21 @@ from bonsai.models import (
     FileSymlink,
     FileWrite,
     ManagedWorktree,
+    OpenUrlPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
 )
 from bonsai.ports import allocate_slot
 from bonsai.process import Runner
-from bonsai.rendering import render_caddy_snippets, render_env_local, render_root_caddyfile
+from bonsai.rendering import (
+    render_caddy_snippets,
+    render_env_local,
+    render_root_caddyfile,
+    template_values,
+)
 from bonsai.slug import branch_slug
 from bonsai.state import load_state, remove_worktree, save_state, update_worktree
+from bonsai.templates import render_template
 
 ConfigInitializer = Callable[[Path, str, str, Path], None]
 
@@ -171,6 +178,59 @@ def _remove_generated_snippets(
             path.unlink()
             removed.append(path)
     return tuple(removed)
+
+
+def _resolve_current_worktree(
+    state: BonsaiState,
+    workspace_root: Path,
+    current_path: Path,
+) -> tuple[str, ManagedWorktree, Path]:
+    current_path = current_path.resolve()
+    default_worktree = ManagedWorktree(
+        path=state.default_worktree,
+        slug=branch_slug(state.default_branch),
+        slot=0,
+    )
+    candidates = [(state.default_branch, default_worktree), *state.worktrees.items()]
+    resolved_candidates = [
+        ((workspace_root / worktree.path).resolve(), branch, worktree)
+        for branch, worktree in candidates
+    ]
+
+    for worktree_path, branch, worktree in sorted(
+        resolved_candidates,
+        key=lambda candidate: len(candidate[0].parts),
+        reverse=True,
+    ):
+        if current_path == worktree_path or current_path.is_relative_to(worktree_path):
+            return branch, worktree, worktree_path
+
+    raise BonsaiWorkspaceError(f"Current directory is not inside a Bonsai worktree: {current_path}")
+
+
+def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    default_worktree = workspace_root / state.default_worktree
+    config = load_config(default_worktree / ".bonsai.toml")
+    branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
+
+    try:
+        service = config.primary_service()
+    except ValueError as exc:
+        raise BonsaiConfigError("No primary public service configured") from exc
+    if service.url is None:
+        raise BonsaiConfigError("Primary public service does not have a URL")
+
+    values = template_values(config, branch, worktree.slot, worktree_path)
+    try:
+        url = render_template(service.url, values)
+    except KeyError as exc:
+        key = exc.args[0]
+        raise BonsaiConfigError(f"Primary URL uses unknown template key: {key}") from exc
+    except ValueError as exc:
+        raise BonsaiConfigError(f"Invalid primary URL template: {exc}") from exc
+
+    return OpenUrlPlan(branch=branch, worktree_path=worktree_path, url=url)
 
 
 def write_files(files: tuple[FileWrite, ...]) -> None:

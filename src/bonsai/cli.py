@@ -1,3 +1,4 @@
+import webbrowser
 from pathlib import Path
 from typing import Annotated
 
@@ -6,7 +7,7 @@ from rich.console import Console
 
 from bonsai import __version__
 from bonsai.config import load_config
-from bonsai.errors import BonsaiConfigError, BonsaiError
+from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.onboarding import (
     ProjectDefaults,
@@ -15,7 +16,13 @@ from bonsai.onboarding import (
     write_starter_config,
 )
 from bonsai.process import SubprocessRunner
-from bonsai.workflows import execute_add, execute_checkout, execute_clone, execute_remove
+from bonsai.workflows import (
+    execute_add,
+    execute_checkout,
+    execute_clone,
+    execute_remove,
+    plan_open_url,
+)
 from bonsai.workspace import find_workspace_root
 
 console = Console()
@@ -240,6 +247,18 @@ def checkout(
         console.print(f"Resolved worktree: {plan.worktree_path}")
         console.print('Run: eval "$(bonsai shell-init zsh)"')
         raise typer.Exit(code=1)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("open")
+def open_command() -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_open_url(root_path, Path.cwd())
+        if not webbrowser.open(plan.url):
+            raise BonsaiWorkspaceError(f"Failed to open URL: {plan.url}")
+        console.print(f"Opened {plan.url}")
     except BonsaiError as exc:
         _fail(exc)
 

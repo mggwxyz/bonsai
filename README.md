@@ -73,6 +73,7 @@ bonsai init
 bonsai add ma-123-implement-auth
 bonsai checkout ma-123-implement-auth
 bonsai remove ma-123-implement-auth
+bonsai open
 bonsai list
 bonsai sync
 bonsai cleanup
@@ -112,3 +113,6 @@ the shell integration.
 
 `bonsai remove <worktree>` removes a managed worktree and its directory. Bonsai
 refuses to remove a worktree with uncommitted changes unless you pass `--force`.
+
+Run `bonsai open` from inside a worktree to open that worktree's primary local
+URL in your default browser.

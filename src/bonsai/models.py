@@ -160,3 +160,10 @@ class RemoveWorktreePlan:
 class CheckoutWorktreePlan:
     worktree_path: Path
     created: bool
+
+
+@dataclass(frozen=True)
+class OpenUrlPlan:
+    branch: str
+    worktree_path: Path
+    url: str
