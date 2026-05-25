@@ -632,8 +632,10 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
             argv: list[str],
             cwd: Path | None = None,
             check: bool = True,
+            env=None,
         ) -> CommandResult:
-            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
             if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
                 return CommandResult(returncode=0, stdout="true\n")
             if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
@@ -670,10 +672,10 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.worktrees["feature"].path == "feature"
     assert all("worktree" not in command.argv for command in runner.commands)
-    assert runner.commands[-2:] == [
-        CommandSpec(argv=("yarn", "install"), cwd=branch_worktree),
-        CommandSpec(argv=("yarn", "setup"), cwd=branch_worktree),
-    ]
+    assert runner.commands[-2].argv == ("yarn", "install")
+    assert runner.commands[-2].cwd == branch_worktree
+    assert runner.commands[-1].argv == ("yarn", "setup")
+    assert runner.commands[-1].cwd == branch_worktree
 
 
 def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
@@ -688,8 +690,10 @@ def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
             argv: list[str],
             cwd: Path | None = None,
             check: bool = True,
+            env=None,
         ) -> CommandResult:
-            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
             if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
                 return CommandResult(returncode=0, stdout="true\n")
             if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
@@ -929,10 +933,38 @@ def test_execute_add_runs_setup_after_install(tmp_path: Path) -> None:
 
     execute_add(runner, "feature", workspace_root)
 
-    assert runner.commands[-2:] == [
-        CommandSpec(argv=("yarn", "install"), cwd=workspace_root / "feature"),
-        CommandSpec(argv=("python", "-c", "print(2)"), cwd=workspace_root / "feature"),
-    ]
+    assert runner.commands[-2].argv == ("yarn", "install")
+    assert runner.commands[-2].cwd == workspace_root / "feature"
+    assert runner.commands[-1].argv == ("python", "-c", "print(2)")
+    assert runner.commands[-1].cwd == workspace_root / "feature"
+
+
+def test_execute_add_runs_setup_with_generated_worktree_env(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    setup_env = dict(runner.commands[-1].env)
+    assert setup_env["COMPOSE_PROJECT_NAME"] == "authentic-feature"
+    assert setup_env["FRONTEND_PORT"] == "4201"
+    assert setup_env["API_PORT"] == "3334"
+    assert setup_env["DB_PORT"] == "5556"
 
 
 def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path) -> None:

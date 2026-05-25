@@ -87,6 +87,9 @@ for the initial checkout directory.
 checkout. Review and commit the generated file so teammates get the same Bonsai
 workspace behavior.
 
+Configured `install` and `setup` commands run from the target worktree with
+Bonsai's generated `.env.local` values available in the subprocess environment.
+
 ## Shell Integration
 
 `bonsai checkout <worktree>` needs shell integration because a CLI child process

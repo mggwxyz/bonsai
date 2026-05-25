@@ -99,6 +99,7 @@ class WorkspacePaths:
 class CommandSpec:
     argv: tuple[str, ...]
     cwd: Path | None = None
+    env: tuple[tuple[str, str], ...] = ()
 
 
 @dataclass(frozen=True)

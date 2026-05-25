@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import shlex
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 
 from bonsai.config import load_config
@@ -264,7 +264,36 @@ def command_summary(command: CommandSpec) -> str:
 
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
     for command in commands:
-        runner.run(list(command.argv), cwd=command.cwd)
+        runner.run(list(command.argv), cwd=command.cwd, env=dict(command.env))
+
+
+def parse_env_content(content: str) -> dict[str, str]:
+    values: dict[str, str] = {}
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        if "=" not in stripped:
+            raise BonsaiWorkspaceError(f"Invalid environment line: {line}")
+        name, value = stripped.split("=", 1)
+        values[name] = value
+    return values
+
+
+def generated_worktree_env(files: tuple[FileWrite, ...]) -> dict[str, str]:
+    for file in files:
+        if file.path.name == ".env.local":
+            return parse_env_content(file.content)
+    return {}
+
+
+def run_worktree_command(
+    runner: Runner,
+    command: str,
+    cwd: Path,
+    env: Mapping[str, str],
+) -> None:
+    runner.run(shlex.split(command), cwd=cwd, env=env)
 
 
 def execute_clone(
@@ -324,10 +353,11 @@ def execute_add(
     apply_symlinks(plan.symlinks)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
+    command_env = generated_worktree_env(plan.files)
     if config.commands.install:
-        runner.run(shlex.split(config.commands.install), cwd=plan.worktree_path)
+        run_worktree_command(runner, config.commands.install, plan.worktree_path, command_env)
     if config.commands.setup:
-        runner.run(shlex.split(config.commands.setup), cwd=plan.worktree_path)
+        run_worktree_command(runner, config.commands.setup, plan.worktree_path, command_env)
     return plan
 
 
