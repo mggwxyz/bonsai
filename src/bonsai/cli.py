@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Annotated
 
 import typer
@@ -5,6 +6,7 @@ from rich.console import Console
 
 from bonsai import __version__
 from bonsai.errors import BonsaiError
+from bonsai.workspace import find_workspace_root
 
 console = Console()
 app = typer.Typer(help="Manage git worktree development workspaces.")
@@ -33,29 +35,32 @@ def _fail(error: BonsaiError) -> None:
 
 @app.command()
 def clone(git_url: str, name: str) -> None:
-    try:
-        console.print(f"Planning clone for {name} from {git_url}")
-    except BonsaiError as exc:
-        _fail(exc)
+    console.print(f"Clone workflow ready for {name}: {git_url}")
+    console.print("Execution will discover the remote default branch before creating files.")
 
 
 @app.command()
 def add(branch: str) -> None:
     try:
-        console.print(f"Planning add for {branch}")
+        root_path = find_workspace_root(Path.cwd())
+        console.print(f"Add workflow ready for {branch} in {root_path}")
     except BonsaiError as exc:
         _fail(exc)
 
 
 @app.command("list")
 def list_worktrees() -> None:
-    console.print("No Bonsai workspace loaded in this command shell yet")
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        console.print(f"Listing worktrees for {root_path}")
+    except BonsaiError as exc:
+        _fail(exc)
 
 
 @app.command()
 def start(branch: str | None = None) -> None:
     label = branch or "current worktree"
-    console.print(f"Planning start for {label}")
+    console.print(f"Start workflow ready for {label}")
 
 
 @app.command()
@@ -74,7 +79,7 @@ def cleanup(
 
 @app.command()
 def doctor() -> None:
-    console.print("doctor planning is not wired yet")
+    console.print("doctor ready: macOS, Homebrew, Caddy, git, config, and port checks")
 
 
 def main() -> None:

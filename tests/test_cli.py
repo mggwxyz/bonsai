@@ -1,3 +1,5 @@
+from pathlib import Path
+
 from typer.testing import CliRunner
 
 from bonsai.cli import app
@@ -22,7 +24,9 @@ def test_help_lists_core_commands() -> None:
 
 
 def test_list_command_exists() -> None:
-    result = runner.invoke(app, ["list"])
+    with runner.isolated_filesystem():
+        Path(".bonsai").mkdir()
+        result = runner.invoke(app, ["list"])
 
     assert result.exit_code == 0
 
@@ -39,3 +43,10 @@ def test_cleanup_dry_run_command_exists() -> None:
 
     assert result.exit_code == 0
     assert "dry run" in result.stdout.lower()
+
+
+def test_doctor_command_exists() -> None:
+    result = runner.invoke(app, ["doctor"])
+
+    assert result.exit_code == 0
+    assert "doctor" in result.stdout.lower()

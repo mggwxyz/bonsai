@@ -15,7 +15,15 @@ from bonsai.git import (
 from bonsai.models import BonsaiState, CommandResult, CommandSpec, FileWrite, ManagedWorktree
 from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
-from bonsai.workflows import plan_add_files, plan_clone_workspace, write_files
+from bonsai.state import save_state
+from bonsai.workflows import (
+    command_summary,
+    execute_add,
+    execute_clone,
+    plan_add_files,
+    plan_clone_workspace,
+    write_files,
+)
 
 
 def test_allocate_slot_uses_lowest_available_positive_integer() -> None:
@@ -315,3 +323,73 @@ def test_write_files_creates_parent_directories(tmp_path: Path) -> None:
     write_files((FileWrite(path=tmp_path / "a" / "b.txt", content="hello\n"),))
 
     assert (tmp_path / "a" / "b.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_command_summary_formats_command_and_cwd() -> None:
+    summary = command_summary(
+        CommandSpec(argv=("yarn", "install"), cwd=Path("/tmp/authentic/main"))
+    )
+
+    assert summary == "cd /tmp/authentic/main && yarn install"
+
+
+def test_caddy_reload_command_is_displayable() -> None:
+    command = caddy_reload_plan(Path("/tmp/authentic/Caddyfile"))
+
+    assert command_summary(command) == "caddy reload --config /tmp/authentic/Caddyfile"
+
+
+def test_execute_clone_rejects_unsafe_name_before_git_commands(tmp_path: Path) -> None:
+    class CloneRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            return CommandResult(returncode=0, stdout="ref: refs/heads/main\tHEAD\n")
+
+    runner = CloneRunner()
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid workspace name"):
+        execute_clone(runner, "git@github.com:org/authentic.git", "../escape", tmp_path)
+
+    assert runner.commands == []
+
+
+def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_add(runner, "../outside", workspace_root)
+
+    assert plan.worktree_path == workspace_root / "outside"
+    assert runner.commands[2].argv == (
+        "git",
+        "-C",
+        str(default_worktree),
+        "worktree",
+        "add",
+        "-b",
+        "../outside",
+        str(workspace_root / "outside"),
+        "origin/main",
+    )

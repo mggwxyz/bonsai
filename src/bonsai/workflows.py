@@ -2,7 +2,16 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bonsai.config import load_config
 from bonsai.errors import BonsaiWorkspaceError
+from bonsai.git import (
+    add_existing_worktree,
+    add_new_worktree,
+    clone_default_branch,
+    discover_default_branch,
+    fetch_origin,
+    remote_branch_exists,
+)
 from bonsai.models import (
     AddFilesPlan,
     BonsaiConfig,
@@ -16,7 +25,7 @@ from bonsai.ports import allocate_slot
 from bonsai.process import Runner
 from bonsai.rendering import render_caddy_snippets, render_env_local, render_root_caddyfile
 from bonsai.slug import branch_slug
-from bonsai.state import update_worktree
+from bonsai.state import load_state, save_state, update_worktree
 
 
 def _safe_path_segment(value: str, label: str) -> str:
@@ -111,6 +120,60 @@ def write_files(files: tuple[FileWrite, ...]) -> None:
         file.path.write_text(file.content, encoding="utf-8")
 
 
+def command_summary(command: CommandSpec) -> str:
+    rendered = " ".join(command.argv)
+    if command.cwd is None:
+        return rendered
+    return f"cd {command.cwd} && {rendered}"
+
+
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
     for command in commands:
         runner.run(list(command.argv), cwd=command.cwd)
+
+
+def execute_clone(
+    runner: Runner,
+    git_url: str,
+    name: str,
+    parent: Path,
+) -> CloneWorkspacePlan:
+    safe_name = _safe_path_segment(name, "workspace name")
+    workspace_root = parent / safe_name
+    if workspace_root.exists():
+        raise BonsaiWorkspaceError(f"Target workspace already exists: {workspace_root}")
+
+    default_branch = discover_default_branch(runner, git_url)
+    default_worktree = workspace_root / default_branch
+    clone_default_branch(runner, git_url, default_branch, default_worktree)
+    config = load_config(default_worktree / ".bonsai.toml")
+    plan = plan_clone_workspace(git_url, safe_name, default_branch, config, parent)
+    write_files(plan.files)
+    save_state(workspace_root / ".bonsai" / "state.json", plan.state)
+    return plan
+
+
+def execute_add(
+    runner: Runner,
+    branch: str,
+    workspace_root: Path,
+) -> AddFilesPlan:
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    default_worktree = workspace_root / state.default_worktree
+    config = load_config(default_worktree / ".bonsai.toml")
+    plan = plan_add_files(config, state, workspace_root, branch)
+    if plan.worktree_path.exists():
+        raise BonsaiWorkspaceError(f"Branch worktree already exists: {plan.worktree_path}")
+    base_branch = config.base_branch or state.default_branch
+
+    fetch_origin(runner, default_worktree)
+    if remote_branch_exists(runner, default_worktree, branch):
+        add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
+    else:
+        add_new_worktree(runner, default_worktree, branch, plan.worktree_path, base_branch)
+    write_files(plan.files)
+    save_state(state_path, plan.updated_state)
+    if config.commands.install:
+        runner.run(config.commands.install.split(), cwd=plan.worktree_path)
+    return plan
