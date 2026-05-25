@@ -1,8 +1,10 @@
 from pathlib import Path
 
 import pytest
+from test_config import VALID_CONFIG, write_config
 
 from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
+from bonsai.config import load_config
 from bonsai.errors import BonsaiCommandError
 from bonsai.git import (
     clone_default_branch,
@@ -10,9 +12,10 @@ from bonsai.git import (
     parse_default_branch,
     remote_branch_exists,
 )
-from bonsai.models import CommandResult, CommandSpec, ManagedWorktree
+from bonsai.models import BonsaiState, CommandResult, CommandSpec, ManagedWorktree
 from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
+from bonsai.workflows import plan_add_files, plan_clone_workspace
 
 
 def test_allocate_slot_uses_lowest_available_positive_integer() -> None:
@@ -110,3 +113,50 @@ def test_caddy_reload_plan_targets_workspace_caddyfile() -> None:
     plan = caddy_reload_plan(Path("/tmp/authentic/Caddyfile"))
 
     assert plan.argv == ("caddy", "reload", "--config", "/tmp/authentic/Caddyfile")
+
+
+def test_plan_clone_workspace_uses_discovered_default_branch(tmp_path: Path) -> None:
+    (tmp_path / "main").mkdir()
+    config_path = write_config(tmp_path / "main", VALID_CONFIG)
+    config = load_config(config_path)
+
+    plan = plan_clone_workspace(
+        git_url="git@github.com:org/authentic.git",
+        name="authentic",
+        default_branch="main",
+        config=config,
+        parent=tmp_path,
+    )
+
+    assert plan.workspace_root == tmp_path / "authentic"
+    assert plan.default_worktree == tmp_path / "authentic" / "main"
+    assert plan.state.default_branch == "main"
+    assert plan.state.default_worktree == "main"
+
+
+def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    plan = plan_add_files(
+        config=config,
+        state=state,
+        workspace_root=tmp_path / "authentic",
+        branch="MB-2036-multi-worktree-port-slots",
+    )
+
+    assert plan.worktree_path == tmp_path / "authentic" / "MB-2036-multi-worktree-port-slots"
+    assert plan.slot == 1
+    assert plan.updated_state.worktrees["MB-2036-multi-worktree-port-slots"].slot == 1
+    assert ".env.local" in {path.name for path in plan.files}
+    assert "mb-2036-multi-worktree-port-slots-frontend.caddy" in {
+        path.name for path in plan.files
+    }
+    assert "mb-2036-multi-worktree-port-slots-api.caddy" in {path.name for path in plan.files}

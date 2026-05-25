@@ -106,3 +106,30 @@ class CommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+@dataclass(frozen=True)
+class FileWrite:
+    path: Path
+    content: str
+
+    @property
+    def name(self) -> str:
+        return self.path.name
+
+
+@dataclass(frozen=True)
+class CloneWorkspacePlan:
+    workspace_root: Path
+    default_worktree: Path
+    state: BonsaiState
+    files: tuple[FileWrite, ...]
+
+
+@dataclass(frozen=True)
+class AddFilesPlan:
+    branch: str
+    worktree_path: Path
+    slot: int
+    files: tuple[FileWrite, ...]
+    updated_state: BonsaiState
