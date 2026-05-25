@@ -21,6 +21,7 @@ from bonsai.models import (
     BonsaiState,
     CloneWorkspacePlan,
     CommandSpec,
+    FileSymlink,
     FileWrite,
     ManagedWorktree,
 )
@@ -99,12 +100,23 @@ def plan_add_files(
         slot = existing_worktree.slot
     worktree_path = workspace_root / slug
     snippets_dir = workspace_root / snippets_dir_name
+    default_worktree_path = workspace_root / state.default_worktree
     files: list[FileWrite] = [
         FileWrite(
             path=worktree_path / ".env.local",
             content=render_env_local(config, branch, slot, worktree_path),
         )
     ]
+    symlinks: list[FileSymlink] = []
+    for shared_file in config.shared_files:
+        source = _safe_path_segment(shared_file.source, "shared file source")
+        target = _safe_path_segment(shared_file.target, "shared file target")
+        symlinks.append(
+            FileSymlink(
+                source=default_worktree_path / source,
+                target=worktree_path / target,
+            )
+        )
     for service_name, content in render_caddy_snippets(config, branch, slot, worktree_path).items():
         service_name = _safe_path_segment(service_name, "service name")
         files.append(FileWrite(path=snippets_dir / f"{slug}-{service_name}.caddy", content=content))
@@ -119,6 +131,7 @@ def plan_add_files(
         worktree_path=worktree_path,
         slot=slot,
         files=tuple(files),
+        symlinks=tuple(symlinks),
         updated_state=updated_state,
     )
 
@@ -127,6 +140,22 @@ def write_files(files: tuple[FileWrite, ...]) -> None:
     for file in files:
         file.path.parent.mkdir(parents=True, exist_ok=True)
         file.path.write_text(file.content, encoding="utf-8")
+
+
+def apply_symlinks(symlinks: tuple[FileSymlink, ...]) -> None:
+    for symlink in symlinks:
+        if not symlink.source.exists():
+            raise BonsaiWorkspaceError(f"Shared file source does not exist: {symlink.source}")
+        if symlink.target.is_symlink():
+            if symlink.target.resolve() == symlink.source.resolve():
+                continue
+            raise BonsaiWorkspaceError(
+                f"Shared file target already exists with a different symlink: {symlink.target}"
+            )
+        if symlink.target.exists():
+            raise BonsaiWorkspaceError(f"Shared file target already exists: {symlink.target}")
+        symlink.target.parent.mkdir(parents=True, exist_ok=True)
+        symlink.target.symlink_to(symlink.source)
 
 
 def command_summary(command: CommandSpec) -> str:
@@ -191,6 +220,7 @@ def execute_add(
             add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
         else:
             add_new_worktree(runner, default_worktree, branch, plan.worktree_path, base_branch)
+    apply_symlinks(plan.symlinks)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
     if config.commands.install:

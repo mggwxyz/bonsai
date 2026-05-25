@@ -119,6 +119,12 @@ class FileWrite:
 
 
 @dataclass(frozen=True)
+class FileSymlink:
+    source: Path
+    target: Path
+
+
+@dataclass(frozen=True)
 class CloneWorkspacePlan:
     workspace_root: Path
     default_worktree: Path
@@ -132,4 +138,5 @@ class AddFilesPlan:
     worktree_path: Path
     slot: int
     files: tuple[FileWrite, ...]
+    symlinks: tuple[FileSymlink, ...]
     updated_state: BonsaiState

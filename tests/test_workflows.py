@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,14 @@ from bonsai.git import (
     parse_default_branch,
     remote_branch_exists,
 )
-from bonsai.models import BonsaiState, CommandResult, CommandSpec, FileWrite, ManagedWorktree
+from bonsai.models import (
+    BonsaiState,
+    CommandResult,
+    CommandSpec,
+    FileWrite,
+    ManagedWorktree,
+    SharedFileConfig,
+)
 from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
 from bonsai.state import load_state, save_state
@@ -170,6 +178,10 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
         path.name for path in plan.files
     }
     assert "mb-2036-multi-worktree-port-slots-api.caddy" in {path.name for path in plan.files}
+    assert plan.symlinks[0].source == tmp_path / "authentic" / "main" / ".env"
+    assert plan.symlinks[0].target == (
+        tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots" / ".env"
+    )
 
 
 def test_plan_clone_workspace_rejects_unsafe_workspace_name(tmp_path: Path) -> None:
@@ -319,6 +331,47 @@ def test_plan_add_files_rejects_branch_with_empty_slug(tmp_path: Path) -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("source", "target", "message"),
+    [
+        ("../.env", ".env", "Invalid shared file source"),
+        ("/tmp/.env", ".env", "Invalid shared file source"),
+        ("", ".env", "Invalid shared file source"),
+        ("config/.env", ".env", "Invalid shared file source"),
+        (".env", "../.env", "Invalid shared file target"),
+        (".env", "/tmp/.env", "Invalid shared file target"),
+        (".env", "", "Invalid shared file target"),
+        (".env", "config/.env", "Invalid shared file target"),
+    ],
+)
+def test_plan_add_files_rejects_unsafe_shared_file_path(
+    tmp_path: Path,
+    source: str,
+    target: str,
+    message: str,
+) -> None:
+    config = replace(
+        load_config(write_config(tmp_path, VALID_CONFIG)),
+        shared_files=(SharedFileConfig(source=source, target=target),),
+    )
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match=message):
+        plan_add_files(
+            config=config,
+            state=state,
+            workspace_root=tmp_path / "authentic",
+            branch="feature",
+        )
+
+
 def test_write_files_creates_parent_directories(tmp_path: Path) -> None:
     write_files((FileWrite(path=tmp_path / "a" / "b.txt", content="hello\n"),))
 
@@ -375,6 +428,7 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
     default_worktree = workspace_root / "main"
     default_worktree.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
@@ -401,6 +455,8 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
         str(workspace_root / "outside"),
         "origin/main",
     )
+    assert (workspace_root / "outside" / ".env").is_symlink()
+    assert (workspace_root / "outside" / ".env").resolve() == default_worktree / ".env"
 
 
 def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Path) -> None:
@@ -428,6 +484,7 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     default_worktree.mkdir(parents=True)
     branch_worktree.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
@@ -444,11 +501,137 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
 
     assert plan.worktree_path == branch_worktree
     assert (branch_worktree / ".env.local").exists()
+    assert (branch_worktree / ".env").is_symlink()
+    assert (branch_worktree / ".env").resolve() == default_worktree / ".env"
     assert (workspace_root / "caddy.d" / "feature-frontend.caddy").exists()
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.worktrees["feature"].path == "feature"
     assert all("worktree" not in command.argv for command in runner.commands)
     assert runner.commands[-1] == CommandSpec(argv=("yarn", "install"), cwd=branch_worktree)
+
+
+def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
+    tmp_path: Path,
+) -> None:
+    class ExistingWorktreeRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="feature\n")
+            return CommandResult(returncode=0)
+
+    runner = ExistingWorktreeRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    source = default_worktree / ".env"
+    source.write_text("SECRET=value\n", encoding="utf-8")
+    target = branch_worktree / ".env"
+    target.symlink_to(source)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert target.is_symlink()
+    assert target.resolve() == source
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.worktrees["feature"].path == "feature"
+
+
+def test_execute_add_rejects_conflicting_shared_file_target_without_saving_state(
+    tmp_path: Path,
+) -> None:
+    class ExistingWorktreeRunner:
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="feature\n")
+            return CommandResult(returncode=0)
+
+    runner = ExistingWorktreeRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    (branch_worktree / ".env").write_text("local secret\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Shared file target already exists"):
+        execute_add(runner, "feature", workspace_root)
+
+    assert not (branch_worktree / ".env.local").exists()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert "feature" not in state.worktrees
+
+
+def test_execute_add_rejects_missing_shared_file_source_without_saving_state(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Shared file source does not exist"):
+        execute_add(runner, "feature", workspace_root)
+
+    assert not (workspace_root / "feature" / ".env.local").exists()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert "feature" not in state.worktrees
 
 
 def test_execute_add_rejects_unrelated_existing_directory(tmp_path: Path) -> None:
@@ -536,6 +719,7 @@ def test_execute_add_parses_quoted_install_command(tmp_path: Path) -> None:
         'install = "python -c \\"print(1)\\""',
     )
     write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
