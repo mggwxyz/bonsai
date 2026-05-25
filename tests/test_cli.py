@@ -22,6 +22,7 @@ def test_help_lists_core_commands() -> None:
     assert result.exit_code == 0
     assert "clone" in result.stdout
     assert "add" in result.stdout
+    assert "init" in result.stdout
     assert "doctor" in result.stdout
 
 
@@ -31,8 +32,14 @@ def test_clone_executes_workflow(monkeypatch) -> None:
     class FakeRunner:
         pass
 
-    def fake_execute_clone(runner, git_url: str, name: str, parent: Path):
-        calls.append((runner, git_url, name, parent))
+    def fake_execute_clone(
+        runner,
+        git_url: str,
+        name: str,
+        parent: Path,
+        config_initializer=None,
+    ):
+        calls.append((runner, git_url, name, parent, config_initializer))
         return SimpleNamespace(
             workspace_root=parent / name,
             default_worktree=parent / name / "main",
@@ -50,16 +57,50 @@ def test_clone_executes_workflow(monkeypatch) -> None:
 
     assert result.exit_code == 0
     assert len(calls) == 1
-    runner_instance, git_url, name, parent_arg = calls[0]
+    runner_instance, git_url, name, parent_arg, config_initializer = calls[0]
     assert isinstance(runner_instance, FakeRunner)
     assert git_url == "https://github.com/quiller-ai/authentic"
     assert name == "bonsai-authentic"
     assert parent_arg == parent
+    assert callable(config_initializer)
     assert "Clone workflow ready" not in result.stdout
 
 
+def test_clone_no_interactive_disables_guided_config(monkeypatch) -> None:
+    calls = []
+
+    def fake_execute_clone(
+        _runner,
+        _git_url: str,
+        _name: str,
+        _parent: Path,
+        config_initializer=None,
+    ):
+        calls.append(config_initializer)
+        return SimpleNamespace(
+            workspace_root=Path("/workspace/repo"),
+            default_worktree=Path("/workspace/repo/main"),
+        )
+
+    monkeypatch.setattr(cli, "execute_clone", fake_execute_clone, raising=False)
+
+    result = runner.invoke(
+        cli.app,
+        ["clone", "https://github.com/org/repo", "repo", "--no-interactive"],
+    )
+
+    assert result.exit_code == 0
+    assert calls == [None]
+
+
 def test_clone_reports_workflow_errors(monkeypatch) -> None:
-    def fake_execute_clone(_runner, _git_url: str, _name: str, _parent: Path):
+    def fake_execute_clone(
+        _runner,
+        _git_url: str,
+        _name: str,
+        _parent: Path,
+        config_initializer=None,
+    ):
         raise BonsaiWorkspaceError("Target workspace already exists")
 
     monkeypatch.setattr(cli, "execute_clone", fake_execute_clone, raising=False)
@@ -68,6 +109,67 @@ def test_clone_reports_workflow_errors(monkeypatch) -> None:
 
     assert result.exit_code == 1
     assert "Error: Target workspace already exists" in result.stdout
+
+
+def test_init_writes_guided_config(monkeypatch) -> None:
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    def fake_current_branch(runner, repo: Path) -> str:
+        calls.append(("branch", runner, repo))
+        return "main"
+
+    def fake_write_guided_config(
+        config_path: Path,
+        repo_path: Path,
+        fallback_name: str,
+        base_branch: str,
+        force: bool = False,
+    ) -> Path:
+        calls.append(("write", config_path, repo_path, fallback_name, base_branch, force))
+        config_path.write_text('name = "repo"\n', encoding="utf-8")
+        return config_path
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "current_branch", fake_current_branch, raising=False)
+    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+
+    with runner.isolated_filesystem():
+        repo = Path.cwd()
+        result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert calls[0][0] == "branch"
+    assert isinstance(calls[0][1], FakeRunner)
+    assert calls[0][2] == repo
+    assert calls[1] == ("write", repo / ".bonsai.toml", repo, repo.name, "main", False)
+    assert "Created" in result.stdout
+
+
+def test_init_force_allows_existing_config(monkeypatch) -> None:
+    calls = []
+
+    monkeypatch.setattr(cli, "current_branch", lambda _runner, _repo: "main", raising=False)
+
+    def fake_write_guided_config(
+        config_path: Path,
+        repo_path: Path,
+        fallback_name: str,
+        base_branch: str,
+        force: bool = False,
+    ) -> Path:
+        _ = (repo_path, fallback_name, base_branch)
+        calls.append(force)
+        return config_path
+
+    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+
+    result = runner.invoke(cli.app, ["init", "--force"])
+
+    assert result.exit_code == 0
+    assert calls == [True]
 
 
 def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
