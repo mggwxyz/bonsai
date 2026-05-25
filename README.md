@@ -2,19 +2,22 @@
 
 Bonsai is a macOS-first CLI for managing parallel local development workspaces with git worktrees, unique ports, generated `.env.local` files, and Caddy HTTPS URLs.
 
-## Install
+## Local Development
+
+```bash
+uv sync --dev
+uv run bonsai --help
+uv run bonsai --version
+```
+
+## Planned Homebrew Install
 
 ```bash
 brew tap mggwxyz/bonsai
 brew install bonsai
 ```
 
-During local development:
-
-```bash
-uv sync --dev
-uv run bonsai --help
-```
+The Homebrew install path will be available after the personal tap, the `v0.1.0` tag, and generated Homebrew Python resources are published.
 
 ## Repository Config
 
@@ -48,12 +51,13 @@ url = "https://${slug}.authentic.localhost"
 
 ```bash
 bonsai clone git@github.com:org/authentic.git authentic
-cd ~/Projects/authentic/main
 bonsai add MB-2036-multi-worktree-port-slots
 bonsai list
 bonsai sync
 bonsai cleanup
 bonsai doctor
 ```
+
+These commands describe the target v1 workflow. The current CLI is still in progress, and commands such as `bonsai clone` and `bonsai add` may print readiness text before the full workflow is enabled.
 
 `bonsai clone` discovers the repository default branch and uses that branch name for the initial checkout directory.
