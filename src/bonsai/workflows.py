@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shlex
 from pathlib import Path
 
 from bonsai.config import load_config
@@ -84,10 +85,16 @@ def plan_add_files(
     branch: str,
 ) -> AddFilesPlan:
     snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
-    slot = allocate_slot(state.worktrees)
     slug = branch_slug(branch)
     if slug == "":
         raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
+    existing_worktree = state.worktrees.get(branch)
+    if existing_worktree is None:
+        slot = allocate_slot(state.worktrees)
+    else:
+        if existing_worktree.path != slug or existing_worktree.slug != slug:
+            raise BonsaiWorkspaceError(f"Branch worktree path conflicts with slug: {branch!r}")
+        slot = existing_worktree.slot
     worktree_path = workspace_root / slug
     snippets_dir = workspace_root / snippets_dir_name
     files: list[FileWrite] = [
@@ -121,10 +128,10 @@ def write_files(files: tuple[FileWrite, ...]) -> None:
 
 
 def command_summary(command: CommandSpec) -> str:
-    rendered = " ".join(command.argv)
+    rendered = " ".join(shlex.quote(arg) for arg in command.argv)
     if command.cwd is None:
         return rendered
-    return f"cd {command.cwd} && {rendered}"
+    return f"cd {shlex.quote(str(command.cwd))} && {rendered}"
 
 
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
@@ -163,17 +170,17 @@ def execute_add(
     default_worktree = workspace_root / state.default_worktree
     config = load_config(default_worktree / ".bonsai.toml")
     plan = plan_add_files(config, state, workspace_root, branch)
-    if plan.worktree_path.exists():
-        raise BonsaiWorkspaceError(f"Branch worktree already exists: {plan.worktree_path}")
-    base_branch = config.base_branch or state.default_branch
-
-    fetch_origin(runner, default_worktree)
-    if remote_branch_exists(runner, default_worktree, branch):
-        add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
-    else:
-        add_new_worktree(runner, default_worktree, branch, plan.worktree_path, base_branch)
+    if plan.worktree_path.exists() and not plan.worktree_path.is_dir():
+        raise BonsaiWorkspaceError(f"Branch worktree path is not a directory: {plan.worktree_path}")
+    if not plan.worktree_path.exists():
+        base_branch = config.base_branch or state.default_branch
+        fetch_origin(runner, default_worktree)
+        if remote_branch_exists(runner, default_worktree, branch):
+            add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
+        else:
+            add_new_worktree(runner, default_worktree, branch, plan.worktree_path, base_branch)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
     if config.commands.install:
-        runner.run(config.commands.install.split(), cwd=plan.worktree_path)
+        runner.run(shlex.split(config.commands.install), cwd=plan.worktree_path)
     return plan

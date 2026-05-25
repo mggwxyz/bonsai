@@ -15,7 +15,7 @@ from bonsai.git import (
 from bonsai.models import BonsaiState, CommandResult, CommandSpec, FileWrite, ManagedWorktree
 from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
-from bonsai.state import save_state
+from bonsai.state import load_state, save_state
 from bonsai.workflows import (
     command_summary,
     execute_add,
@@ -333,6 +333,14 @@ def test_command_summary_formats_command_and_cwd() -> None:
     assert summary == "cd /tmp/authentic/main && yarn install"
 
 
+def test_command_summary_shell_quotes_command_and_cwd() -> None:
+    summary = command_summary(
+        CommandSpec(argv=("python", "-c", "print(1)"), cwd=Path("/tmp/space dir"))
+    )
+
+    assert summary == "cd '/tmp/space dir' && python -c 'print(1)'"
+
+
 def test_caddy_reload_command_is_displayable() -> None:
     command = caddy_reload_plan(Path("/tmp/authentic/Caddyfile"))
 
@@ -393,3 +401,61 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
         str(workspace_root / "outside"),
         "origin/main",
     )
+
+
+def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_add(runner, "feature", workspace_root)
+
+    assert plan.worktree_path == branch_worktree
+    assert (branch_worktree / ".env.local").exists()
+    assert (workspace_root / "caddy.d" / "feature-frontend.caddy").exists()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.worktrees["feature"].path == "feature"
+    assert all("worktree" not in command.argv for command in runner.commands)
+    assert runner.commands == [CommandSpec(argv=("yarn", "install"), cwd=branch_worktree)]
+
+
+def test_execute_add_parses_quoted_install_command(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        'install = "yarn install"',
+        'install = "python -c \\"print(1)\\""',
+    )
+    write_config(default_worktree, config_text)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert runner.commands[-1].argv == ("python", "-c", "print(1)")
