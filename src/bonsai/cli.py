@@ -19,10 +19,13 @@ from bonsai.onboarding import (
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
 from bonsai.workflows import (
+    check_workspace_health,
     execute_add,
     execute_checkout,
     execute_clone,
     execute_remove,
+    execute_start,
+    execute_sync,
     plan_open_url,
     workspace_config_path,
 )
@@ -335,15 +338,34 @@ def list_worktrees() -> None:
 
 
 @app.command()
-def start(branch: str | None = None) -> None:
-    label = branch or "current worktree"
-    console.print(f"Start workflow ready for {label}")
+def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        label = branch or "current worktree"
+        console.print(f"Starting {label}")
+        exit_code = execute_start(SubprocessRunner(), root_path, branch, Path.cwd())
+        raise typer.Exit(code=exit_code)
+    except BonsaiError as exc:
+        _fail(exc)
 
 
 @app.command()
 def sync(apply: bool = typer.Option(False, "--apply", help="Write regenerated files.")) -> None:
-    mode = "apply" if apply else "dry run"
-    console.print(f"sync {mode}")
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_sync(SubprocessRunner(), root_path, apply=apply)
+        mode = "apply" if apply else "dry run"
+        console.print(f"sync {mode}")
+        if not plan.actions:
+            console.print("No sync changes")
+        for action in plan.actions:
+            console.print(f"{action.kind} {action.path}")
+        if apply and plan.reload_caddy:
+            console.print("reload Caddy")
+        elif not apply and plan.reload_caddy and plan.actions:
+            console.print("reload Caddy after apply")
+    except BonsaiError as exc:
+        _fail(exc)
 
 
 @app.command()
@@ -356,7 +378,21 @@ def cleanup(
 
 @app.command()
 def doctor() -> None:
-    console.print("doctor ready: macOS, Homebrew, Caddy, git, config, and port checks")
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        report = check_workspace_health(SubprocessRunner(), root_path)
+        table = Table(title="Bonsai doctor")
+        table.add_column("Check")
+        table.add_column("Status")
+        table.add_column("Detail")
+        table.add_column("Hint")
+        for check in report.checks:
+            table.add_row(check.name, check.status, check.detail, check.hint or "")
+        console.print(table)
+        if report.failed:
+            raise typer.Exit(code=1)
+    except BonsaiError as exc:
+        _fail(exc)
 
 
 def main() -> None:

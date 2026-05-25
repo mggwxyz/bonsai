@@ -567,11 +567,64 @@ def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkey
     assert "managed" in result.stdout
 
 
-def test_sync_dry_run_command_exists() -> None:
+def test_start_executes_workflow(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_start(_runner, root: Path, branch: str | None, current_path: Path) -> int:
+        calls.append((root, branch, current_path))
+        return 7
+
+    monkeypatch.setattr(cli, "execute_start", fake_execute_start, raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["start", "feature"])
+
+    assert result.exit_code == 7
+    assert calls == [(tmp_path, "feature", tmp_path)]
+    assert "Starting feature" in result.stdout
+
+
+def test_sync_dry_run_reports_planned_actions(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_sync(_runner, root: Path, apply: bool = False):
+        assert root == tmp_path
+        assert apply is False
+        return SimpleNamespace(
+            actions=[
+                SimpleNamespace(kind="write", path=tmp_path / "main" / ".env.local"),
+                SimpleNamespace(kind="remove", path=tmp_path / "caddy.d" / "old.caddy"),
+            ],
+            reload_caddy=True,
+        )
+
+    monkeypatch.setattr(cli, "execute_sync", fake_execute_sync, raising=False)
+
     result = runner.invoke(cli.app, ["sync"])
 
     assert result.exit_code == 0
-    assert "dry run" in result.stdout.lower()
+    assert "sync dry run" in result.stdout.lower()
+    assert "write" in result.stdout
+    assert "remove" in result.stdout
+    assert "reload Caddy" in result.stdout
+
+
+def test_sync_apply_passes_apply_true(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_sync(_runner, root: Path, apply: bool = False):
+        calls.append((root, apply))
+        return SimpleNamespace(actions=[], reload_caddy=False)
+
+    monkeypatch.setattr(cli, "execute_sync", fake_execute_sync, raising=False)
+
+    result = runner.invoke(cli.app, ["sync", "--apply"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, True)]
+    assert "No sync changes" in result.stdout
 
 
 def test_cleanup_dry_run_command_exists() -> None:
@@ -581,8 +634,47 @@ def test_cleanup_dry_run_command_exists() -> None:
     assert "dry run" in result.stdout.lower()
 
 
-def test_doctor_command_exists() -> None:
+def test_doctor_reports_failed_checks(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_check_workspace_health(_runner, root: Path):
+        assert root == tmp_path
+        return SimpleNamespace(
+            failed=True,
+            checks=[
+                SimpleNamespace(
+                    name="env main",
+                    status="fail",
+                    detail="Missing .env.local",
+                    hint="Run: bonsai sync --apply",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cli, "check_workspace_health", fake_check_workspace_health, raising=False)
+
+    result = runner.invoke(cli.app, ["doctor"])
+
+    assert result.exit_code == 1
+    assert "env main" in result.stdout
+    assert "Missing .env.local" in result.stdout
+    assert "bonsai sync --apply" in result.stdout
+
+
+def test_doctor_exits_zero_when_checks_pass(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+    monkeypatch.setattr(
+        cli,
+        "check_workspace_health",
+        lambda _runner, _root: SimpleNamespace(
+            failed=False,
+            checks=[SimpleNamespace(name="config", status="ok", detail="loaded", hint=None)],
+        ),
+        raising=False,
+    )
+
     result = runner.invoke(cli.app, ["doctor"])
 
     assert result.exit_code == 0
-    assert "doctor" in result.stdout.lower()
+    assert "config" in result.stdout
+    assert "loaded" in result.stdout
