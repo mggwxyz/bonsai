@@ -11,6 +11,7 @@ class Bonsai < Formula
   url "https://github.com/mggwxyz/bonsai.git", tag: "v0.1.0"
   license "MIT"
 
+  depends_on "caddy"
   depends_on "python@3.12"
 
   def install
