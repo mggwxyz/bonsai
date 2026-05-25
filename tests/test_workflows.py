@@ -288,6 +288,36 @@ def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> 
     assert plan.reload_caddy is True
 
 
+def test_plan_sync_removes_stale_configured_service_snippets(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    snippets_dir = workspace_root / "caddy.d"
+    default_worktree.mkdir(parents=True)
+    snippets_dir.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    stale = snippets_dir / "old-feature-frontend.caddy"
+    stale.write_text("https://old.authentic.localhost {\n}\n", encoding="utf-8")
+    keep = snippets_dir / "handwritten.caddy"
+    keep.write_text("http://example.localhost {\n}\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = plan_sync(workspace_root)
+
+    remove_paths = {action.path for action in plan.actions if action.kind == "remove"}
+    assert stale in remove_paths
+    assert keep not in remove_paths
+
+
 def test_execute_sync_dry_run_does_not_write_files(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
@@ -309,6 +339,72 @@ def test_execute_sync_dry_run_does_not_write_files(tmp_path: Path) -> None:
 
     assert any(action.path == default_worktree / ".env.local" for action in plan.actions)
     assert not (default_worktree / ".env.local").exists()
+
+
+def test_execute_sync_apply_writes_files_and_reloads_caddy(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_sync(runner, workspace_root, apply=True)
+
+    assert (default_worktree / ".env.local").exists()
+    assert (workspace_root / "Caddyfile").exists()
+    assert (workspace_root / "caddy.d" / "main-frontend.caddy").exists()
+    assert plan.reload_caddy is True
+    assert runner.commands[-1] == caddy_reload_plan(workspace_root / "Caddyfile")
+
+
+def test_execute_sync_apply_skips_caddy_reload_without_public_services(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(
+        default_worktree,
+        """
+name = "authentic"
+base_branch = "main"
+
+[commands]
+start = "yarn dev"
+
+[[services]]
+name = "db"
+port_env = "DB_PORT"
+base_port = 5555
+public = false
+""",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_sync(runner, workspace_root, apply=True)
+
+    assert plan.reload_caddy is False
+    assert runner.commands == []
 
 
 def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) -> None:

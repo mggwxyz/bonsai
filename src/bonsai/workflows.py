@@ -291,6 +291,25 @@ def _desired_sync_files(
     return desired
 
 
+def _stale_generated_snippet_actions(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    desired_paths: set[Path],
+) -> tuple[SyncFileAction, ...]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    snippets_dir = workspace_root / snippets_dir_name
+    if not snippets_dir.exists():
+        return ()
+    service_suffixes = tuple(f"-{service.name}.caddy" for service in config.public_services())
+    actions: list[SyncFileAction] = []
+    for path in sorted(snippets_dir.glob("*.caddy")):
+        if path in desired_paths:
+            continue
+        if any(path.name.endswith(suffix) for suffix in service_suffixes):
+            actions.append(SyncFileAction(kind="remove", path=path))
+    return tuple(actions)
+
+
 def plan_sync(workspace_root: Path) -> SyncPlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
@@ -299,6 +318,13 @@ def plan_sync(workspace_root: Path) -> SyncPlan:
     for path, content in sorted(desired.items(), key=lambda item: str(item[0])):
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             actions.append(SyncFileAction(kind="write", path=path, content=content))
+    actions.extend(
+        _stale_generated_snippet_actions(
+            config,
+            workspace_root,
+            set(desired),
+        )
+    )
     return SyncPlan(actions=tuple(actions), reload_caddy=bool(config.public_services()))
 
 
@@ -310,6 +336,12 @@ def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> S
         if action.kind == "write" and action.content is not None:
             action.path.parent.mkdir(parents=True, exist_ok=True)
             action.path.write_text(action.content, encoding="utf-8")
+        elif action.kind == "remove":
+            action.path.unlink(missing_ok=True)
+    if plan.reload_caddy:
+        state = load_state(workspace_root / ".bonsai" / "state.json")
+        config = load_workspace_config(workspace_root, state)
+        reload_workspace_caddy(runner, config, workspace_root)
     return plan
 
 
