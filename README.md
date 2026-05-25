@@ -10,14 +10,15 @@ uv run bonsai --help
 uv run bonsai --version
 ```
 
-## Planned Homebrew Install
+## Homebrew Install
 
 ```bash
-brew tap mggwxyz/bonsai
+brew tap mggwxyz/tap
 brew install bonsai
 ```
 
-The Homebrew install path will be available after the personal tap, the `v0.1.0` tag, and generated Homebrew Python resources are published.
+Bonsai is published from the personal Homebrew tap at
+`mggwxyz/homebrew-tap`.
 
 ## Repository Config
 
