@@ -28,16 +28,22 @@ from bonsai.models import (
     CheckoutWorktreePlan,
     CloneWorkspacePlan,
     CommandSpec,
+    DoctorCheck,
+    DoctorReport,
     FileSymlink,
     FileWrite,
     ManagedWorktree,
     OpenUrlPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
+    SyncFileAction,
+    SyncPlan,
+    WorktreeTarget,
 )
 from bonsai.ports import allocate_slot
 from bonsai.process import Runner, format_command
 from bonsai.rendering import (
+    GENERATED_FILE_HEADER,
     render_caddy_snippets,
     render_env_local,
     render_root_caddyfile,
@@ -88,6 +94,16 @@ def _safe_path_segment(value: str, label: str) -> str:
     ):
         raise BonsaiWorkspaceError(f"Invalid {label}: {value!r}")
     return value
+
+
+def _check_port_listening(port: int) -> bool:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def plan_clone_workspace(
@@ -233,6 +249,312 @@ def _resolve_current_worktree(
             return branch, worktree, worktree_path
 
     raise BonsaiWorkspaceError(f"Current directory is not inside a Bonsai worktree: {current_path}")
+
+
+def _configured_worktree_targets(
+    state: BonsaiState,
+    workspace_root: Path,
+) -> tuple[WorktreeTarget, ...]:
+    default = WorktreeTarget(
+        branch=state.default_branch,
+        worktree=ManagedWorktree(
+            path=state.default_worktree,
+            slug=branch_slug(state.default_branch),
+            slot=0,
+        ),
+        worktree_path=workspace_root / state.default_worktree,
+    )
+    managed = tuple(
+        WorktreeTarget(
+            branch=branch,
+            worktree=worktree,
+            worktree_path=workspace_root / worktree.path,
+        )
+        for branch, worktree in state.worktrees.items()
+    )
+    return (default, *managed)
+
+
+def _desired_sync_files(
+    config: BonsaiConfig,
+    state: BonsaiState,
+    workspace_root: Path,
+) -> dict[Path, str]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
+    snippets_dir = workspace_root / snippets_dir_name
+    desired: dict[Path, str] = {
+        workspace_root / root_caddyfile: render_root_caddyfile(snippets_dir),
+    }
+    for target in _configured_worktree_targets(state, workspace_root):
+        desired[target.worktree_path / ".env.local"] = render_env_local(
+            config,
+            target.branch,
+            target.worktree.slot,
+            target.worktree_path,
+        )
+        for service_name, content in render_caddy_snippets(
+            config,
+            target.branch,
+            target.worktree.slot,
+            target.worktree_path,
+        ).items():
+            service_name = _safe_path_segment(service_name, "service name")
+            desired[snippets_dir / f"{target.worktree.slug}-{service_name}.caddy"] = content
+    return desired
+
+
+def _stale_generated_snippet_actions(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    desired_paths: set[Path],
+) -> tuple[SyncFileAction, ...]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    snippets_dir = workspace_root / snippets_dir_name
+    if not snippets_dir.exists():
+        return ()
+    actions: list[SyncFileAction] = []
+    for path in sorted(snippets_dir.glob("*.caddy")):
+        if not path.is_file():
+            continue
+        if path in desired_paths:
+            continue
+        if _is_bonsai_generated_file(path):
+            actions.append(SyncFileAction(kind="remove", path=path))
+    return tuple(actions)
+
+
+def _is_bonsai_generated_file(path: Path) -> bool:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    first_line = content.splitlines()[0] if content else ""
+    return first_line == GENERATED_FILE_HEADER
+
+
+def _sync_actions_affect_caddy(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    actions: list[SyncFileAction],
+) -> bool:
+    root_caddyfile = workspace_root / _safe_path_segment(
+        config.caddy.root_caddyfile,
+        "caddy root_caddyfile",
+    )
+    snippets_dir = workspace_root / _safe_path_segment(
+        config.caddy.snippets_dir,
+        "caddy snippets_dir",
+    )
+    return any(
+        action.path == root_caddyfile
+        or (action.path.parent == snippets_dir and action.path.suffix == ".caddy")
+        for action in actions
+    )
+
+
+def plan_sync(workspace_root: Path) -> SyncPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    desired = _desired_sync_files(config, state, workspace_root)
+    actions: list[SyncFileAction] = []
+    for path, content in sorted(desired.items(), key=lambda item: str(item[0])):
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            actions.append(SyncFileAction(kind="write", path=path, content=content))
+    actions.extend(
+        _stale_generated_snippet_actions(
+            config,
+            workspace_root,
+            set(desired),
+        )
+    )
+    return SyncPlan(
+        actions=tuple(actions),
+        reload_caddy=bool(config.public_services())
+        or _sync_actions_affect_caddy(config, workspace_root, actions),
+    )
+
+
+def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> SyncPlan:
+    plan = plan_sync(workspace_root)
+    if not apply:
+        return plan
+    for action in plan.actions:
+        if action.kind == "write" and action.content is not None:
+            action.path.parent.mkdir(parents=True, exist_ok=True)
+            action.path.write_text(action.content, encoding="utf-8")
+        elif action.kind == "remove":
+            action.path.unlink(missing_ok=True)
+    if plan.reload_caddy:
+        state = load_state(workspace_root / ".bonsai" / "state.json")
+        config = load_workspace_config(workspace_root, state)
+        reload_workspace_caddy(runner, config, workspace_root)
+    return plan
+
+
+def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport:
+    checks: list[DoctorCheck] = []
+    state_path = workspace_root / ".bonsai" / "state.json"
+    if not state_path.exists():
+        return DoctorReport(
+            checks=(
+                DoctorCheck(
+                    name="workspace state",
+                    status="fail",
+                    detail=f"Missing {state_path}",
+                ),
+            )
+        )
+
+    state = load_state(state_path)
+    config = load_workspace_config(workspace_root, state)
+    checks.append(DoctorCheck("workspace state", "ok", str(state_path)))
+    checks.append(DoctorCheck("config", "ok", str(config.path)))
+
+    git_result = runner.run(["git", "--version"], check=False)
+    checks.append(
+        DoctorCheck(
+            "git",
+            "ok" if git_result.returncode == 0 else "fail",
+            git_result.stdout.strip() or "git command failed",
+        )
+    )
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        if not target.worktree_path.exists():
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "fail",
+                    f"Missing {target.worktree_path}",
+                )
+            )
+            continue
+        if not is_git_worktree(runner, target.worktree_path):
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "fail",
+                    f"Not a git worktree: {target.worktree_path}",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "ok",
+                    str(target.worktree_path),
+                )
+            )
+
+        env_path = target.worktree_path / ".env.local"
+        if env_path.exists():
+            checks.append(DoctorCheck(f"env {target.branch}", "ok", str(env_path)))
+        else:
+            checks.append(
+                DoctorCheck(
+                    f"env {target.branch}",
+                    "fail",
+                    f"Missing {env_path}",
+                    "Run: bonsai sync --apply",
+                )
+            )
+
+    expected_sync = plan_sync(workspace_root)
+    for action in expected_sync.actions:
+        if action.kind == "write" and action.path.name.endswith(".caddy"):
+            checks.append(
+                DoctorCheck(
+                    f"caddy snippet {action.path.name}",
+                    "fail",
+                    f"Missing or stale {action.path}",
+                    "Run: bonsai sync --apply",
+                )
+            )
+
+    if config.public_services():
+        root_caddyfile = workspace_root / _safe_path_segment(
+            config.caddy.root_caddyfile,
+            "caddy root_caddyfile",
+        )
+        checks.append(
+            DoctorCheck(
+                "root Caddyfile",
+                "ok" if root_caddyfile.exists() else "fail",
+                str(root_caddyfile),
+                None if root_caddyfile.exists() else "Run: bonsai sync --apply",
+            )
+        )
+        caddy_result = runner.run(["caddy", "version"], check=False)
+        checks.append(
+            DoctorCheck(
+                "caddy",
+                "ok" if caddy_result.returncode == 0 else "fail",
+                caddy_result.stdout.strip() or "caddy command failed",
+            )
+        )
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        for service in config.services:
+            port = service.base_port + target.worktree.slot
+            if _check_port_listening(port):
+                checks.append(
+                    DoctorCheck(
+                        f"port {port}",
+                        "fail",
+                        f"{service.name} port is already in use",
+                    )
+                )
+            else:
+                checks.append(DoctorCheck(f"port {port}", "ok", service.name))
+
+    return DoctorReport(checks=tuple(checks))
+
+
+def resolve_start_target(
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+) -> WorktreeTarget:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    if name is None:
+        branch, worktree, worktree_path = _resolve_current_worktree(
+            state,
+            workspace_root,
+            current_path,
+        )
+        return WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        if name in {target.branch, target.worktree.path, target.worktree.slug}:
+            return target
+
+    raise BonsaiWorkspaceError(f"Unknown Bonsai worktree: {name}")
+
+
+def execute_start(
+    runner: Runner,
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+) -> int:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    if config.commands.start is None:
+        raise BonsaiConfigError("Missing config key commands.start")
+
+    target = resolve_start_target(workspace_root, name, current_path)
+    env_path = target.worktree_path / ".env.local"
+    if not env_path.exists():
+        raise BonsaiWorkspaceError(
+            f"Missing generated env file at {env_path}. Run: bonsai sync --apply"
+        )
+    env = parse_env_content(env_path.read_text(encoding="utf-8"))
+    return runner.run_stream(
+        shlex.split(config.commands.start),
+        cwd=target.worktree_path,
+        env=env,
+    )
 
 
 def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:

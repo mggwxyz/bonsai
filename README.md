@@ -83,6 +83,7 @@ bonsai init
 bonsai add ma-123-implement-auth
 bonsai checkout ma-123-implement-auth
 bonsai remove ma-123-implement-auth
+bonsai start
 bonsai open
 bonsai list
 bonsai sync
@@ -99,6 +100,11 @@ config; otherwise it writes to the current checkout.
 
 Configured `install` and `setup` commands run from the target worktree with
 Bonsai's generated `.env.local` values available in the subprocess environment.
+
+`bonsai start [branch]` runs the configured `[commands].start` command in the
+target worktree. With no branch, it uses the current worktree. The process runs
+in the foreground with values from the generated `.env.local` added to the
+environment.
 
 ## Shell Integration
 
@@ -129,3 +135,12 @@ refuses to remove a worktree with uncommitted changes unless you pass `--force`.
 
 Run `bonsai open` from inside a worktree to open that worktree's primary local
 URL in your default browser.
+
+`bonsai sync` compares generated `.env.local` files and Caddy files against the
+current config and state. It is a dry run by default. Use `bonsai sync --apply`
+to write missing or stale generated files, remove stale Bonsai Caddy snippets,
+and reload Caddy when local routing changed.
+
+`bonsai doctor` checks workspace state, config, git worktrees, generated files,
+Caddy files, Caddy availability, and configured service port conflicts. Failed
+repairable checks point to `bonsai sync --apply`.

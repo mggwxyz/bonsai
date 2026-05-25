@@ -77,6 +77,13 @@ class ManagedWorktree:
 
 
 @dataclass(frozen=True)
+class WorktreeTarget:
+    branch: str
+    worktree: ManagedWorktree
+    worktree_path: Path
+
+
+@dataclass(frozen=True)
 class BonsaiState:
     version: int
     name: str
@@ -110,6 +117,23 @@ class CommandResult:
 
 
 @dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str
+    detail: str
+    hint: str | None = None
+
+
+@dataclass(frozen=True)
+class DoctorReport:
+    checks: tuple[DoctorCheck, ...]
+
+    @property
+    def failed(self) -> bool:
+        return any(check.status == "fail" for check in self.checks)
+
+
+@dataclass(frozen=True)
 class FileWrite:
     path: Path
     content: str
@@ -123,6 +147,19 @@ class FileWrite:
 class FileSymlink:
     source: Path
     target: Path
+
+
+@dataclass(frozen=True)
+class SyncFileAction:
+    kind: str
+    path: Path
+    content: str | None = None
+
+
+@dataclass(frozen=True)
+class SyncPlan:
+    actions: tuple[SyncFileAction, ...]
+    reload_caddy: bool
 
 
 @dataclass(frozen=True)
