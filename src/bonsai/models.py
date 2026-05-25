@@ -77,6 +77,13 @@ class ManagedWorktree:
 
 
 @dataclass(frozen=True)
+class WorktreeTarget:
+    branch: str
+    worktree: ManagedWorktree
+    worktree_path: Path
+
+
+@dataclass(frozen=True)
 class BonsaiState:
     version: int
     name: str

@@ -6,7 +6,7 @@ from test_config import VALID_CONFIG, write_config
 
 from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
 from bonsai.config import load_config
-from bonsai.errors import BonsaiCommandError, BonsaiWorkspaceError
+from bonsai.errors import BonsaiCommandError, BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
     clone_default_branch,
     discover_default_branch,
@@ -32,9 +32,11 @@ from bonsai.workflows import (
     execute_checkout,
     execute_clone,
     execute_remove,
+    execute_start,
     plan_add_files,
     plan_clone_workspace,
     plan_open_url,
+    resolve_start_target,
     write_files,
 )
 
@@ -1337,6 +1339,113 @@ def test_execute_checkout_resolves_existing_managed_worktree(tmp_path: Path) -> 
 
     assert plan.worktree_path == workspace_root / "feature"
     assert plan.created is False
+
+
+def test_resolve_start_target_includes_default_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    target = resolve_start_target(workspace_root, "main", default_worktree)
+
+    assert target.branch == "main"
+    assert target.worktree.path == "main"
+    assert target.worktree.slot == 0
+    assert target.worktree_path == default_worktree
+
+
+def test_execute_start_runs_configured_command_with_generated_env(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    (feature_worktree / ".env.local").write_text(
+        "FRONTEND_PORT=4201\nCOMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    exit_code = execute_start(runner, workspace_root, "feature", feature_worktree)
+
+    assert exit_code == 0
+    assert runner.commands == [
+        CommandSpec(
+            argv=("yarn", "dev"),
+            cwd=feature_worktree,
+            env=(
+                ("COMPOSE_PROJECT_NAME", "authentic-feature"),
+                ("FRONTEND_PORT", "4201"),
+            ),
+        )
+    ]
+
+
+def test_execute_start_fails_when_start_command_is_missing(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG.replace('start = "yarn dev"\n', ""))
+    (default_worktree / ".env.local").write_text("FRONTEND_PORT=4200\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiConfigError, match=r"commands.start"):
+        execute_start(runner, workspace_root, None, default_worktree)
+
+
+def test_execute_start_requires_generated_env_file(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match=r"bonsai sync --apply"):
+        execute_start(RecordingRunner(), workspace_root, None, default_worktree)
 
 
 def test_execute_checkout_adds_missing_branch_with_existing_add_workflow(tmp_path: Path) -> None:

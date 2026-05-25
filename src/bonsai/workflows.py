@@ -34,6 +34,7 @@ from bonsai.models import (
     OpenUrlPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
+    WorktreeTarget,
 )
 from bonsai.ports import allocate_slot
 from bonsai.process import Runner
@@ -233,6 +234,76 @@ def _resolve_current_worktree(
             return branch, worktree, worktree_path
 
     raise BonsaiWorkspaceError(f"Current directory is not inside a Bonsai worktree: {current_path}")
+
+
+def _configured_worktree_targets(
+    state: BonsaiState,
+    workspace_root: Path,
+) -> tuple[WorktreeTarget, ...]:
+    default = WorktreeTarget(
+        branch=state.default_branch,
+        worktree=ManagedWorktree(
+            path=state.default_worktree,
+            slug=branch_slug(state.default_branch),
+            slot=0,
+        ),
+        worktree_path=workspace_root / state.default_worktree,
+    )
+    managed = tuple(
+        WorktreeTarget(
+            branch=branch,
+            worktree=worktree,
+            worktree_path=workspace_root / worktree.path,
+        )
+        for branch, worktree in state.worktrees.items()
+    )
+    return (default, *managed)
+
+
+def resolve_start_target(
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+) -> WorktreeTarget:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    if name is None:
+        branch, worktree, worktree_path = _resolve_current_worktree(
+            state,
+            workspace_root,
+            current_path,
+        )
+        return WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        if name in {target.branch, target.worktree.path, target.worktree.slug}:
+            return target
+
+    raise BonsaiWorkspaceError(f"Unknown Bonsai worktree: {name}")
+
+
+def execute_start(
+    runner: Runner,
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+) -> int:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    if config.commands.start is None:
+        raise BonsaiConfigError("Missing config key commands.start")
+
+    target = resolve_start_target(workspace_root, name, current_path)
+    env_path = target.worktree_path / ".env.local"
+    if not env_path.exists():
+        raise BonsaiWorkspaceError(
+            f"Missing generated env file at {env_path}. Run: bonsai sync --apply"
+        )
+    env = parse_env_content(env_path.read_text(encoding="utf-8"))
+    return runner.run_stream(
+        shlex.split(config.commands.start),
+        cwd=target.worktree_path,
+        env=env,
+    )
 
 
 def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
