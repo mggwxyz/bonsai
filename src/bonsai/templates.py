@@ -15,6 +15,6 @@ def render_template(template: str, values: Mapping[str, object]) -> str:
 
     rendered = TOKEN_RE.sub(replace, template)
     unmatched_template_text = TOKEN_RE.sub("", template)
-    if "${" in unmatched_template_text or "}" in unmatched_template_text:
+    if "${" in unmatched_template_text:
         raise ValueError(f"Malformed template placeholder in {template!r}")
     return rendered

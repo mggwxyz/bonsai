@@ -28,6 +28,10 @@ def test_render_template_rejects_unknown_values() -> None:
         render_template("${MISSING}", {})
 
 
+def test_render_template_allows_literal_braces() -> None:
+    assert render_template('{"enabled":true}', {}) == '{"enabled":true}'
+
+
 @pytest.mark.parametrize("template", ["${FRONTEND-PORT}", "${}"])
 def test_render_template_rejects_malformed_placeholders(template: str) -> None:
     with pytest.raises(ValueError, match="Malformed template placeholder"):
