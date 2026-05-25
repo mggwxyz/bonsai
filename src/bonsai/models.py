@@ -117,6 +117,23 @@ class CommandResult:
 
 
 @dataclass(frozen=True)
+class DoctorCheck:
+    name: str
+    status: str
+    detail: str
+    hint: str | None = None
+
+
+@dataclass(frozen=True)
+class DoctorReport:
+    checks: tuple[DoctorCheck, ...]
+
+    @property
+    def failed(self) -> bool:
+        return any(check.status == "fail" for check in self.checks)
+
+
+@dataclass(frozen=True)
 class FileWrite:
     path: Path
     content: str

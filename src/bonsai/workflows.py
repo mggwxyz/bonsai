@@ -28,6 +28,8 @@ from bonsai.models import (
     CheckoutWorktreePlan,
     CloneWorkspacePlan,
     CommandSpec,
+    DoctorCheck,
+    DoctorReport,
     FileSymlink,
     FileWrite,
     ManagedWorktree,
@@ -92,6 +94,16 @@ def _safe_path_segment(value: str, label: str) -> str:
     ):
         raise BonsaiWorkspaceError(f"Invalid {label}: {value!r}")
     return value
+
+
+def _check_port_listening(port: int) -> bool:
+    import socket
+
+    try:
+        with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def plan_clone_workspace(
@@ -378,6 +390,125 @@ def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> S
         config = load_workspace_config(workspace_root, state)
         reload_workspace_caddy(runner, config, workspace_root)
     return plan
+
+
+def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport:
+    checks: list[DoctorCheck] = []
+    state_path = workspace_root / ".bonsai" / "state.json"
+    if not state_path.exists():
+        return DoctorReport(
+            checks=(
+                DoctorCheck(
+                    name="workspace state",
+                    status="fail",
+                    detail=f"Missing {state_path}",
+                ),
+            )
+        )
+
+    state = load_state(state_path)
+    config = load_workspace_config(workspace_root, state)
+    checks.append(DoctorCheck("workspace state", "ok", str(state_path)))
+    checks.append(DoctorCheck("config", "ok", str(config.path)))
+
+    git_result = runner.run(["git", "--version"], check=False)
+    checks.append(
+        DoctorCheck(
+            "git",
+            "ok" if git_result.returncode == 0 else "fail",
+            git_result.stdout.strip() or "git command failed",
+        )
+    )
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        if not target.worktree_path.exists():
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "fail",
+                    f"Missing {target.worktree_path}",
+                )
+            )
+            continue
+        if not is_git_worktree(runner, target.worktree_path):
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "fail",
+                    f"Not a git worktree: {target.worktree_path}",
+                )
+            )
+        else:
+            checks.append(
+                DoctorCheck(
+                    f"worktree {target.branch}",
+                    "ok",
+                    str(target.worktree_path),
+                )
+            )
+
+        env_path = target.worktree_path / ".env.local"
+        if env_path.exists():
+            checks.append(DoctorCheck(f"env {target.branch}", "ok", str(env_path)))
+        else:
+            checks.append(
+                DoctorCheck(
+                    f"env {target.branch}",
+                    "fail",
+                    f"Missing {env_path}",
+                    "Run: bonsai sync --apply",
+                )
+            )
+
+    expected_sync = plan_sync(workspace_root)
+    for action in expected_sync.actions:
+        if action.kind == "write" and action.path.name.endswith(".caddy"):
+            checks.append(
+                DoctorCheck(
+                    f"caddy snippet {action.path.name}",
+                    "fail",
+                    f"Missing or stale {action.path}",
+                    "Run: bonsai sync --apply",
+                )
+            )
+
+    if config.public_services():
+        root_caddyfile = workspace_root / _safe_path_segment(
+            config.caddy.root_caddyfile,
+            "caddy root_caddyfile",
+        )
+        checks.append(
+            DoctorCheck(
+                "root Caddyfile",
+                "ok" if root_caddyfile.exists() else "fail",
+                str(root_caddyfile),
+                None if root_caddyfile.exists() else "Run: bonsai sync --apply",
+            )
+        )
+        caddy_result = runner.run(["caddy", "version"], check=False)
+        checks.append(
+            DoctorCheck(
+                "caddy",
+                "ok" if caddy_result.returncode == 0 else "fail",
+                caddy_result.stdout.strip() or "caddy command failed",
+            )
+        )
+
+    for target in _configured_worktree_targets(state, workspace_root):
+        for service in config.services:
+            port = service.base_port + target.worktree.slot
+            if _check_port_listening(port):
+                checks.append(
+                    DoctorCheck(
+                        f"port {port}",
+                        "fail",
+                        f"{service.name} port is already in use",
+                    )
+                )
+            else:
+                checks.append(DoctorCheck(f"port {port}", "ok", service.name))
+
+    return DoctorReport(checks=tuple(checks))
 
 
 def resolve_start_target(

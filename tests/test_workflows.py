@@ -28,6 +28,7 @@ from bonsai.process import RecordingRunner
 from bonsai.rendering import render_root_caddyfile
 from bonsai.state import load_state, save_state
 from bonsai.workflows import (
+    check_workspace_health,
     command_summary,
     execute_add,
     execute_checkout,
@@ -678,6 +679,131 @@ public = false
 
     assert plan.reload_caddy is False
     assert runner.commands == []
+
+
+def test_check_workspace_health_passes_for_complete_workspace(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class HealthyRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[0] == "git" and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[0] == "caddy":
+                return CommandResult(returncode=0, stdout="v2.8.0\n")
+            return CommandResult(returncode=0)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    report = check_workspace_health(HealthyRunner(), workspace_root)
+
+    assert report.failed is False
+    assert all(check.status != "fail" for check in report.checks)
+
+
+def test_check_workspace_health_fails_for_missing_generated_env(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class GitRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "git" and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            return CommandResult(returncode=0, stdout="ok\n")
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    report = check_workspace_health(GitRunner(), workspace_root)
+
+    assert report.failed is True
+    assert any(
+        check.name == "env main" and check.hint == "Run: bonsai sync --apply"
+        for check in report.checks
+    )
+
+
+def test_check_workspace_health_reports_port_conflicts(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class GitRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "git" and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            return CommandResult(returncode=0, stdout="ok\n")
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda port: port == 4200)
+
+    report = check_workspace_health(GitRunner(), workspace_root)
+
+    assert report.failed is True
+    assert any(check.name == "port 4200" and check.status == "fail" for check in report.checks)
 
 
 def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) -> None:
