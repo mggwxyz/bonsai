@@ -16,12 +16,14 @@ from bonsai.onboarding import (
     write_starter_config,
 )
 from bonsai.process import SubprocessRunner
+from bonsai.state import load_state
 from bonsai.workflows import (
     execute_add,
     execute_checkout,
     execute_clone,
     execute_remove,
     plan_open_url,
+    workspace_config_path,
 )
 from bonsai.workspace import find_workspace_root
 
@@ -137,9 +139,9 @@ def _guided_config_initializer(
     default_branch: str,
     default_worktree: Path,
 ) -> None:
-    console.print(f"No .bonsai.toml found in {default_branch}.")
+    console.print(f"No Bonsai config found for {default_branch}.")
     console.print("Bonsai needs one config file to manage ports, env files, and local URLs.")
-    console.print("Let's create it now.")
+    console.print("Let's create a local workspace config now.")
     path = write_guided_config(
         config_path=config_path,
         repo_path=default_worktree,
@@ -147,7 +149,7 @@ def _guided_config_initializer(
         base_branch=default_branch,
     )
     console.print(f"Created {path}")
-    console.print("Review and commit this file so teammates can use Bonsai too.")
+    console.print("Move or copy it into the repo if teammates should share it.")
 
 
 @app.command()
@@ -185,17 +187,32 @@ def init_command(
     ] = False,
 ) -> None:
     try:
-        repo_path = Path.cwd()
+        current_path = Path.cwd()
+        repo_path = current_path
+        fallback_name = current_path.name
+        config_path = current_path / ".bonsai.toml"
+        try:
+            workspace_root = find_workspace_root(current_path)
+        except BonsaiWorkspaceError:
+            pass
+        else:
+            state_path = workspace_root / ".bonsai" / "state.json"
+            if state_path.exists():
+                state = load_state(state_path)
+                config_path = workspace_config_path(workspace_root)
+                fallback_name = workspace_root.name
+                if current_path == workspace_root:
+                    repo_path = workspace_root / state.default_worktree
         branch = current_branch(SubprocessRunner(), repo_path)
         path = write_guided_config(
-            config_path=repo_path / ".bonsai.toml",
+            config_path=config_path,
             repo_path=repo_path,
-            fallback_name=repo_path.name,
+            fallback_name=fallback_name,
             base_branch=branch,
             force=force,
         )
         console.print(f"Created {path}")
-        console.print("Review and commit this file so teammates can use Bonsai too.")
+        console.print("Move or copy it into the repo if teammates should share it.")
     except BonsaiError as exc:
         _fail(exc)
 

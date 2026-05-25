@@ -562,7 +562,7 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
         initializer_calls.append(
             (config_path, workspace_name, default_branch, default_worktree)
         )
-        write_config(default_worktree, VALID_CONFIG)
+        config_path.write_text(VALID_CONFIG, encoding="utf-8")
 
     plan = execute_clone(
         runner,
@@ -574,7 +574,7 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
 
     assert initializer_calls == [
         (
-            tmp_path / "authentic" / "main" / ".bonsai.toml",
+            tmp_path / "authentic" / ".bonsai.toml",
             "authentic",
             "main",
             tmp_path / "authentic" / "main",
@@ -582,6 +582,34 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
     ]
     assert plan.workspace_root == tmp_path / "authentic"
     assert (tmp_path / "authentic" / ".bonsai" / "state.json").exists()
+    assert (tmp_path / "authentic" / "Caddyfile").exists()
+
+
+def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Path) -> None:
+    class RepoConfigCloneRunner:
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            if argv[:3] == ["git", "ls-remote", "--symref"]:
+                return CommandResult(returncode=0, stdout="ref: refs/heads/main\tHEAD\n")
+            if argv[:3] == ["git", "clone", "--branch"]:
+                target = Path(argv[-1])
+                target.mkdir(parents=True)
+                write_config(target, VALID_CONFIG)
+            return CommandResult(returncode=0)
+
+    plan = execute_clone(
+        RepoConfigCloneRunner(),
+        "git@github.com:org/authentic.git",
+        "authentic",
+        tmp_path,
+    )
+
+    assert plan.workspace_root == tmp_path / "authentic"
     assert (tmp_path / "authentic" / "Caddyfile").exists()
 
 
@@ -620,6 +648,39 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
     )
     assert (workspace_root / "outside" / ".env").is_symlink()
     assert (workspace_root / "outside" / ".env").resolve() == default_worktree / ".env"
+
+
+def test_execute_add_prefers_workspace_root_config_over_repo_config(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(
+        default_worktree,
+        VALID_CONFIG.replace('setup = "yarn setup"', 'setup = "yarn repo-setup"'),
+    )
+    root_config = VALID_CONFIG.replace(
+        'setup = "yarn setup"',
+        'setup = "python -c \\"print(2)\\""',
+    ).replace("base_port = 5555", "base_port = 6000")
+    write_config(workspace_root, root_config)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert runner.commands[-1].argv == ("python", "-c", "print(2)")
+    assert dict(runner.commands[-1].env)["DB_PORT"] == "6001"
 
 
 def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Path) -> None:

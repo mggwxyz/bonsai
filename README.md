@@ -34,12 +34,22 @@ brew install bonsai
 Bonsai is published from the personal Homebrew tap at
 `mggwxyz/homebrew-tap`.
 
-## Repository Config
+## Bonsai Config
 
-Each managed repository commits `.bonsai.toml` at its root. If the file is
-missing during `bonsai clone`, Bonsai starts a short guided setup and writes a
-starter config before continuing. Use `--no-interactive` to fail instead of
-prompting.
+Each managed workspace uses one `.bonsai.toml`. Bonsai first looks for a local
+workspace config at the Bonsai workspace root, then falls back to a repo config
+inside the default worktree:
+
+```text
+my-app/.bonsai.toml
+my-app/main/.bonsai.toml
+```
+
+Use the workspace root config for local-only Bonsai settings. Move or copy the
+file into the repo if teammates should share the same ports, commands, and URL
+templates. If no config exists during `bonsai clone`, Bonsai starts a short
+guided setup and writes a local workspace config before continuing. Use
+`--no-interactive` to fail instead of prompting.
 
 ```toml
 name = "my-app"
@@ -84,8 +94,8 @@ bonsai doctor
 for the initial checkout directory.
 
 `bonsai init` runs the same guided `.bonsai.toml` setup inside an existing
-checkout. Review and commit the generated file so teammates get the same Bonsai
-workspace behavior.
+checkout. When run inside a managed Bonsai workspace, it writes the local root
+config; otherwise it writes to the current checkout.
 
 Configured `install` and `setup` commands run from the target worktree with
 Bonsai's generated `.env.local` values available in the subprocess environment.

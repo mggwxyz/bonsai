@@ -179,6 +179,100 @@ def test_init_writes_guided_config(monkeypatch) -> None:
     assert "Created" in result.stdout
 
 
+def test_init_writes_guided_config_to_workspace_root_when_managed(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={},
+        ),
+    )
+
+    monkeypatch.chdir(default_worktree)
+    monkeypatch.setattr(cli, "current_branch", lambda _runner, _repo: "main", raising=False)
+
+    def fake_write_guided_config(
+        config_path: Path,
+        repo_path: Path,
+        fallback_name: str,
+        base_branch: str,
+        force: bool = False,
+    ) -> Path:
+        calls.append(("write", config_path, repo_path, fallback_name, base_branch, force))
+        config_path.write_text('name = "repo"\n', encoding="utf-8")
+        return config_path
+
+    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert calls == [
+        ("write", workspace_root / ".bonsai.toml", default_worktree, "authentic", "main", False)
+    ]
+
+
+def test_init_from_workspace_root_uses_default_worktree_for_project_detection(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    branch_calls = []
+    write_calls = []
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={},
+        ),
+    )
+
+    monkeypatch.chdir(workspace_root)
+
+    def fake_current_branch(_runner, repo: Path) -> str:
+        branch_calls.append(repo)
+        return "main"
+
+    def fake_write_guided_config(
+        config_path: Path,
+        repo_path: Path,
+        fallback_name: str,
+        base_branch: str,
+        force: bool = False,
+    ) -> Path:
+        write_calls.append((config_path, repo_path, fallback_name, base_branch, force))
+        config_path.write_text('name = "repo"\n', encoding="utf-8")
+        return config_path
+
+    monkeypatch.setattr(cli, "current_branch", fake_current_branch, raising=False)
+    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert branch_calls == [default_worktree]
+    assert write_calls == [
+        (workspace_root / ".bonsai.toml", default_worktree, "authentic", "main", False)
+    ]
+
+
 def test_init_force_allows_existing_config(monkeypatch) -> None:
     calls = []
 

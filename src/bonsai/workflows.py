@@ -49,6 +49,32 @@ from bonsai.templates import render_template
 ConfigInitializer = Callable[[Path, str, str, Path], None]
 
 
+def workspace_config_path(workspace_root: Path) -> Path:
+    return workspace_root / ".bonsai.toml"
+
+
+def repo_config_path(workspace_root: Path, default_worktree: str) -> Path:
+    return workspace_root / default_worktree / ".bonsai.toml"
+
+
+def resolve_workspace_config_path(workspace_root: Path, default_worktree: str) -> Path:
+    root_config = workspace_config_path(workspace_root)
+    if root_config.exists():
+        return root_config
+
+    fallback_config = repo_config_path(workspace_root, default_worktree)
+    if fallback_config.exists():
+        return fallback_config
+
+    raise BonsaiConfigError(
+        f"Missing .bonsai.toml at {root_config} or {fallback_config}"
+    )
+
+
+def load_workspace_config(workspace_root: Path, state: BonsaiState) -> BonsaiConfig:
+    return load_config(resolve_workspace_config_path(workspace_root, state.default_worktree))
+
+
 def _safe_path_segment(value: str, label: str) -> str:
     path = Path(value)
     if (
@@ -210,8 +236,7 @@ def _resolve_current_worktree(
 
 def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
-    default_worktree = workspace_root / state.default_worktree
-    config = load_config(default_worktree / ".bonsai.toml")
+    config = load_workspace_config(workspace_root, state)
     branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
 
     try:
@@ -311,10 +336,11 @@ def execute_clone(
     default_branch = discover_default_branch(runner, git_url)
     default_worktree = workspace_root / default_branch
     clone_default_branch(runner, git_url, default_branch, default_worktree)
-    config_path = default_worktree / ".bonsai.toml"
-    if not config_path.exists() and config_initializer is not None:
-        config_initializer(config_path, safe_name, default_branch, default_worktree)
-    config = load_config(config_path)
+    root_config = workspace_config_path(workspace_root)
+    fallback_config = repo_config_path(workspace_root, default_branch)
+    if not root_config.exists() and not fallback_config.exists() and config_initializer is not None:
+        config_initializer(root_config, safe_name, default_branch, default_worktree)
+    config = load_config(resolve_workspace_config_path(workspace_root, default_branch))
     plan = plan_clone_workspace(git_url, safe_name, default_branch, config, parent)
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
@@ -329,7 +355,7 @@ def execute_add(
     state_path = workspace_root / ".bonsai" / "state.json"
     state = load_state(state_path)
     default_worktree = workspace_root / state.default_worktree
-    config = load_config(default_worktree / ".bonsai.toml")
+    config = load_workspace_config(workspace_root, state)
     plan = plan_add_files(config, state, workspace_root, branch)
     if plan.worktree_path.exists() and not plan.worktree_path.is_dir():
         raise BonsaiWorkspaceError(f"Branch worktree path is not a directory: {plan.worktree_path}")
@@ -401,7 +427,7 @@ def execute_remove(
 
     worktree_path = workspace_root / resolved.worktree.path
     default_worktree = workspace_root / state.default_worktree
-    config = load_config(default_worktree / ".bonsai.toml")
+    config = load_workspace_config(workspace_root, state)
     if not force and worktree_has_changes(runner, worktree_path):
         raise BonsaiWorkspaceError(
             f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
