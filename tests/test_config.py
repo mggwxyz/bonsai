@@ -20,8 +20,8 @@ snippets_dir = "caddy.d"
 
 [commands]
 install = "yarn install"
+setup = "yarn setup"
 start = "yarn dev"
-migrate = "yarn docker:migrate --abort-on-container-exit"
 
 [[shared_files]]
 source = ".env"
@@ -66,7 +66,10 @@ def test_load_config_parses_valid_file(tmp_path: Path) -> None:
     assert config.base_branch == "main"
     assert config.workspace.default_parent == "~/Projects"
     assert config.caddy.snippets_dir == "caddy.d"
+    assert config.commands.install == "yarn install"
+    assert config.commands.setup == "yarn setup"
     assert config.commands.start == "yarn dev"
+    assert not hasattr(config.commands, "migrate")
     assert config.shared_files[0].source == ".env"
     assert config.env[0].name == "COMPOSE_PROJECT_NAME"
     assert [service.name for service in config.services] == ["frontend", "api", "db"]

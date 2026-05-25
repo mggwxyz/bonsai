@@ -20,8 +20,8 @@ class CaddyConfig:
 @dataclass(frozen=True)
 class CommandsConfig:
     install: str | None = None
+    setup: str | None = None
     start: str | None = None
-    migrate: str | None = None
 
 
 @dataclass(frozen=True)

@@ -106,8 +106,8 @@ def _caddy(raw: dict[str, Any]) -> CaddyConfig:
 def _commands(raw: dict[str, Any]) -> CommandsConfig:
     return CommandsConfig(
         install=_optional_str(raw, "install"),
+        setup=_optional_str(raw, "setup"),
         start=_optional_str(raw, "start"),
-        migrate=_optional_str(raw, "migrate"),
     )
 
 

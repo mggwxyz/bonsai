@@ -84,6 +84,7 @@ def _prompt_starter_config(defaults: ProjectDefaults) -> StarterConfig:
     app_name = typer.prompt("App name", default=defaults.app_name).strip()
     base_branch = typer.prompt("Base branch", default=defaults.base_branch).strip()
     install_command = _optional_prompt("Install command", defaults.install_command)
+    setup_command = _optional_prompt("Setup command", defaults.setup_command)
     start_command = _optional_prompt("Start command", defaults.start_command)
     symlink_env = typer.confirm(
         "Symlink .env into each worktree",
@@ -97,6 +98,7 @@ def _prompt_starter_config(defaults: ProjectDefaults) -> StarterConfig:
         name=app_name,
         base_branch=base_branch,
         install_command=install_command,
+        setup_command=setup_command,
         start_command=start_command,
         symlink_env=symlink_env,
         service_name=service_name,

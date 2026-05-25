@@ -13,6 +13,7 @@ class ProjectDefaults:
     app_name: str
     base_branch: str
     install_command: str | None
+    setup_command: str | None
     start_command: str | None
     has_env_file: bool
     service_name: str
@@ -26,6 +27,7 @@ class StarterConfig:
     name: str
     base_branch: str
     install_command: str | None
+    setup_command: str | None
     start_command: str | None
     symlink_env: bool
     service_name: str
@@ -50,6 +52,7 @@ def detect_project_defaults(
         app_name=app_slug,
         base_branch=base_branch,
         install_command=f"{package_manager} install" if package else None,
+        setup_command=None,
         start_command=_script_command(package_manager, start_script) if start_script else None,
         has_env_file=(repo_path / ".env").exists(),
         service_name="frontend",
@@ -77,6 +80,8 @@ def render_starter_config(config: StarterConfig) -> str:
     command_lines = []
     if config.install_command:
         command_lines.append(f"install = {_toml_string(config.install_command)}")
+    if config.setup_command:
+        command_lines.append(f"setup = {_toml_string(config.setup_command)}")
     if config.start_command:
         command_lines.append(f"start = {_toml_string(config.start_command)}")
     if command_lines:

@@ -232,4 +232,6 @@ def execute_add(
     save_state(state_path, plan.updated_state)
     if config.commands.install:
         runner.run(shlex.split(config.commands.install), cwd=plan.worktree_path)
+    if config.commands.setup:
+        runner.run(shlex.split(config.commands.setup), cwd=plan.worktree_path)
     return plan

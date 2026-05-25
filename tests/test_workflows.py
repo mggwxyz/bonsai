@@ -561,7 +561,10 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.worktrees["feature"].path == "feature"
     assert all("worktree" not in command.argv for command in runner.commands)
-    assert runner.commands[-1] == CommandSpec(argv=("yarn", "install"), cwd=branch_worktree)
+    assert runner.commands[-2:] == [
+        CommandSpec(argv=("yarn", "install"), cwd=branch_worktree),
+        CommandSpec(argv=("yarn", "setup"), cwd=branch_worktree),
+    ]
 
 
 def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
@@ -788,4 +791,36 @@ def test_execute_add_parses_quoted_install_command(tmp_path: Path) -> None:
 
     execute_add(runner, "feature", workspace_root)
 
-    assert runner.commands[-1].argv == ("python", "-c", "print(1)")
+    assert runner.commands[-2].argv == ("python", "-c", "print(1)")
+    assert runner.commands[-1].argv == ("yarn", "setup")
+
+
+def test_execute_add_runs_setup_after_install(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        'setup = "yarn setup"',
+        'setup = "python -c \\"print(2)\\""',
+    )
+    write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert runner.commands[-2:] == [
+        CommandSpec(argv=("yarn", "install"), cwd=workspace_root / "feature"),
+        CommandSpec(argv=("python", "-c", "print(2)"), cwd=workspace_root / "feature"),
+    ]

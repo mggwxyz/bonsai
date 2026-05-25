@@ -26,6 +26,7 @@ def test_detect_project_defaults_uses_package_scripts_and_lockfile(tmp_path: Pat
 
     assert defaults.app_name == "authentic"
     assert defaults.install_command == "pnpm install"
+    assert defaults.setup_command is None
     assert defaults.start_command == "pnpm dev"
     assert defaults.has_env_file is True
     assert defaults.url == "https://${slug}.authentic.localhost"
@@ -37,6 +38,7 @@ def test_render_starter_config_loads_as_valid_bonsai_config() -> None:
             name="authentic",
             base_branch="main",
             install_command="pnpm install",
+            setup_command="pnpm setup",
             start_command="pnpm dev",
             symlink_env=True,
             service_name="frontend",
@@ -48,6 +50,7 @@ def test_render_starter_config_loads_as_valid_bonsai_config() -> None:
 
     assert 'name = "authentic"' in text
     assert 'install = "pnpm install"' in text
+    assert 'setup = "pnpm setup"' in text
     assert 'source = ".env"' in text
 
 
@@ -58,6 +61,7 @@ def test_write_starter_config_creates_loadable_file(tmp_path: Path) -> None:
             name="my app",
             base_branch="staging",
             install_command=None,
+            setup_command=None,
             start_command=None,
             symlink_env=False,
             service_name="web",
@@ -72,5 +76,6 @@ def test_write_starter_config_creates_loadable_file(tmp_path: Path) -> None:
     assert config.name == "my app"
     assert config.base_branch == "staging"
     assert config.commands.install is None
+    assert config.commands.setup is None
     assert config.shared_files == ()
     assert config.primary_service().name == "web"

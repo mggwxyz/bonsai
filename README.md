@@ -50,8 +50,8 @@ default_parent = "~/Projects"
 
 [commands]
 install = "npm install"
+setup = "npm db:migrate"
 start = "npm dev"
-migrate = "npm db:migrate"
 
 [[env]]
 name = "COMPOSE_PROJECT_NAME"
