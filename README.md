@@ -10,14 +10,22 @@ uv run bonsai --help
 uv run bonsai --version
 ```
 
-## Planned Homebrew Install
+## Homebrew Status
+
+The Homebrew tap is not published yet. `brew tap mggwxyz/bonsai` expects a
+GitHub repository named `mggwxyz/homebrew-bonsai`; until that repository exists,
+Homebrew will fail before it can read the formula in this repo.
+
+The Homebrew install path will be:
 
 ```bash
 brew tap mggwxyz/bonsai
 brew install bonsai
 ```
 
-The Homebrew install path will be available after the personal tap, the `v0.1.0` tag, and generated Homebrew Python resources are published.
+Before publishing that command, create the personal tap repo, tag the Bonsai
+source release, and generate Homebrew Python resource blocks in the tap formula.
+See [docs/homebrew-release.md](docs/homebrew-release.md).
 
 ## Repository Config
 
