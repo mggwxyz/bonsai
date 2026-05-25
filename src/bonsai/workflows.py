@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bonsai.errors import BonsaiWorkspaceError
 from bonsai.models import (
     AddFilesPlan,
     BonsaiConfig,
@@ -16,6 +17,20 @@ from bonsai.slug import branch_slug
 from bonsai.state import update_worktree
 
 
+def _safe_path_segment(value: str, label: str) -> str:
+    path = Path(value)
+    if (
+        value == ""
+        or value in {".", ".."}
+        or path.is_absolute()
+        or len(path.parts) != 1
+        or "/" in value
+        or "\\" in value
+    ):
+        raise BonsaiWorkspaceError(f"Invalid {label}: {value!r}")
+    return value
+
+
 def plan_clone_workspace(
     git_url: str,
     name: str,
@@ -23,9 +38,12 @@ def plan_clone_workspace(
     config: BonsaiConfig,
     parent: Path,
 ) -> CloneWorkspacePlan:
+    name = _safe_path_segment(name, "workspace name")
+    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     workspace_root = parent / name
     default_worktree = workspace_root / default_branch
-    snippets_dir = workspace_root / config.caddy.snippets_dir
+    snippets_dir = workspace_root / snippets_dir_name
     state = BonsaiState(
         version=1,
         name=name,
@@ -36,7 +54,7 @@ def plan_clone_workspace(
     )
     files = (
         FileWrite(
-            path=workspace_root / config.caddy.root_caddyfile,
+            path=workspace_root / root_caddyfile,
             content=render_root_caddyfile(snippets_dir),
         ),
     )
@@ -54,10 +72,11 @@ def plan_add_files(
     workspace_root: Path,
     branch: str,
 ) -> AddFilesPlan:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     slot = allocate_slot(state.worktrees)
     slug = branch_slug(branch)
     worktree_path = workspace_root / branch
-    snippets_dir = workspace_root / config.caddy.snippets_dir
+    snippets_dir = workspace_root / snippets_dir_name
     files: list[FileWrite] = [
         FileWrite(
             path=worktree_path / ".env.local",
@@ -65,6 +84,7 @@ def plan_add_files(
         )
     ]
     for service_name, content in render_caddy_snippets(config, branch, slot, worktree_path).items():
+        service_name = _safe_path_segment(service_name, "service name")
         files.append(FileWrite(path=snippets_dir / f"{slug}-{service_name}.caddy", content=content))
 
     updated_state = update_worktree(

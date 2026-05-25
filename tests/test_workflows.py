@@ -5,7 +5,7 @@ from test_config import VALID_CONFIG, write_config
 
 from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
 from bonsai.config import load_config
-from bonsai.errors import BonsaiCommandError
+from bonsai.errors import BonsaiCommandError, BonsaiWorkspaceError
 from bonsai.git import (
     clone_default_branch,
     discover_default_branch,
@@ -160,3 +160,80 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
         path.name for path in plan.files
     }
     assert "mb-2036-multi-worktree-port-slots-api.caddy" in {path.name for path in plan.files}
+
+
+def test_plan_clone_workspace_rejects_unsafe_workspace_name(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid workspace name"):
+        plan_clone_workspace(
+            git_url="git@github.com:org/authentic.git",
+            name="../escape",
+            default_branch="main",
+            config=config,
+            parent=tmp_path,
+        )
+
+
+def test_plan_clone_workspace_rejects_unsafe_snippets_dir(tmp_path: Path) -> None:
+    config_text = VALID_CONFIG.replace(
+        'snippets_dir = "caddy.d"',
+        'snippets_dir = "../outside"',
+    )
+    config = load_config(
+        write_config(tmp_path, config_text)
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid caddy snippets_dir"):
+        plan_clone_workspace(
+            git_url="git@github.com:org/authentic.git",
+            name="authentic",
+            default_branch="main",
+            config=config,
+            parent=tmp_path,
+        )
+
+
+def test_plan_clone_workspace_rejects_unsafe_root_caddyfile(tmp_path: Path) -> None:
+    config_text = VALID_CONFIG.replace(
+        'root_caddyfile = "Caddyfile"',
+        'root_caddyfile = "/tmp/Caddyfile"',
+    )
+    config = load_config(
+        write_config(tmp_path, config_text)
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid caddy root_caddyfile"):
+        plan_clone_workspace(
+            git_url="git@github.com:org/authentic.git",
+            name="authentic",
+            default_branch="main",
+            config=config,
+            parent=tmp_path,
+        )
+
+
+def test_plan_add_files_rejects_unsafe_service_name(tmp_path: Path) -> None:
+    config_text = VALID_CONFIG.replace(
+        '[[services]]\nname = "frontend"',
+        '[[services]]\nname = "../frontend"',
+    )
+    config = load_config(
+        write_config(tmp_path, config_text)
+    )
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid service name"):
+        plan_add_files(
+            config=config,
+            state=state,
+            workspace_root=tmp_path / "authentic",
+            branch="MB-2036-multi-worktree-port-slots",
+        )
