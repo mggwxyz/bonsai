@@ -321,6 +321,26 @@ def _is_bonsai_generated_file(path: Path) -> bool:
     return first_line == GENERATED_FILE_HEADER
 
 
+def _sync_actions_affect_caddy(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    actions: list[SyncFileAction],
+) -> bool:
+    root_caddyfile = workspace_root / _safe_path_segment(
+        config.caddy.root_caddyfile,
+        "caddy root_caddyfile",
+    )
+    snippets_dir = workspace_root / _safe_path_segment(
+        config.caddy.snippets_dir,
+        "caddy snippets_dir",
+    )
+    return any(
+        action.path == root_caddyfile
+        or (action.path.parent == snippets_dir and action.path.suffix == ".caddy")
+        for action in actions
+    )
+
+
 def plan_sync(workspace_root: Path) -> SyncPlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
@@ -336,7 +356,11 @@ def plan_sync(workspace_root: Path) -> SyncPlan:
             set(desired),
         )
     )
-    return SyncPlan(actions=tuple(actions), reload_caddy=bool(config.public_services()))
+    return SyncPlan(
+        actions=tuple(actions),
+        reload_caddy=bool(config.public_services())
+        or _sync_actions_affect_caddy(config, workspace_root, actions),
+    )
 
 
 def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> SyncPlan:
