@@ -422,6 +422,60 @@ def test_execute_clone_rejects_unsafe_name_before_git_commands(tmp_path: Path) -
     assert runner.commands == []
 
 
+def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) -> None:
+    class MissingConfigCloneRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[:3] == ["git", "ls-remote", "--symref"]:
+                return CommandResult(returncode=0, stdout="ref: refs/heads/main\tHEAD\n")
+            if argv[:3] == ["git", "clone", "--branch"]:
+                Path(argv[-1]).mkdir(parents=True)
+                return CommandResult(returncode=0)
+            return CommandResult(returncode=0)
+
+    runner = MissingConfigCloneRunner()
+    initializer_calls = []
+
+    def initializer(
+        config_path: Path,
+        workspace_name: str,
+        default_branch: str,
+        default_worktree: Path,
+    ) -> None:
+        initializer_calls.append(
+            (config_path, workspace_name, default_branch, default_worktree)
+        )
+        write_config(default_worktree, VALID_CONFIG)
+
+    plan = execute_clone(
+        runner,
+        "git@github.com:org/authentic.git",
+        "authentic",
+        tmp_path,
+        config_initializer=initializer,
+    )
+
+    assert initializer_calls == [
+        (
+            tmp_path / "authentic" / "main" / ".bonsai.toml",
+            "authentic",
+            "main",
+            tmp_path / "authentic" / "main",
+        )
+    ]
+    assert plan.workspace_root == tmp_path / "authentic"
+    assert (tmp_path / "authentic" / ".bonsai" / "state.json").exists()
+    assert (tmp_path / "authentic" / "Caddyfile").exists()
+
+
 def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"

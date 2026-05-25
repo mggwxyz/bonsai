@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shlex
+from collections.abc import Callable
 from pathlib import Path
 
 from bonsai.config import load_config
@@ -30,6 +31,8 @@ from bonsai.process import Runner
 from bonsai.rendering import render_caddy_snippets, render_env_local, render_root_caddyfile
 from bonsai.slug import branch_slug
 from bonsai.state import load_state, save_state, update_worktree
+
+ConfigInitializer = Callable[[Path, str, str, Path], None]
 
 
 def _safe_path_segment(value: str, label: str) -> str:
@@ -175,6 +178,7 @@ def execute_clone(
     git_url: str,
     name: str,
     parent: Path,
+    config_initializer: ConfigInitializer | None = None,
 ) -> CloneWorkspacePlan:
     safe_name = _safe_path_segment(name, "workspace name")
     workspace_root = parent / safe_name
@@ -184,7 +188,10 @@ def execute_clone(
     default_branch = discover_default_branch(runner, git_url)
     default_worktree = workspace_root / default_branch
     clone_default_branch(runner, git_url, default_branch, default_worktree)
-    config = load_config(default_worktree / ".bonsai.toml")
+    config_path = default_worktree / ".bonsai.toml"
+    if not config_path.exists() and config_initializer is not None:
+        config_initializer(config_path, safe_name, default_branch, default_worktree)
+    config = load_config(config_path)
     plan = plan_clone_workspace(git_url, safe_name, default_branch, config, parent)
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
