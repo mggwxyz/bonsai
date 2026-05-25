@@ -24,7 +24,7 @@ The Homebrew install path will be available after the personal tap, the `v0.1.0`
 Each managed repository commits `.bonsai.toml` at its root.
 
 ```toml
-name = "authentic"
+name = "my-app"
 base_branch = "main"
 
 [workspace]
@@ -37,21 +37,21 @@ migrate = "yarn docker:migrate --abort-on-container-exit"
 
 [[env]]
 name = "COMPOSE_PROJECT_NAME"
-value = "authentic-${slug}"
+value = "my-app-${slug}"
 
 [[services]]
 name = "frontend"
 port_env = "FRONTEND_PORT"
 base_port = 4200
 primary = true
-url = "https://${slug}.authentic.localhost"
+url = "https://${slug}.my-app.localhost"
 ```
 
 ## Usage
 
 ```bash
-bonsai clone git@github.com:org/authentic.git authentic
-bonsai add MB-2036-multi-worktree-port-slots
+bonsai clone git@github.com:org/my-app.git my-app
+bonsai add AB-123-implement-auth
 bonsai list
 bonsai sync
 bonsai cleanup
