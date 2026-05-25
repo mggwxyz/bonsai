@@ -7,6 +7,34 @@ from rich.console import Console
 from bonsai.process import SubprocessRunner, format_command
 
 
+class StatusContext:
+    def __init__(self) -> None:
+        self.entered = False
+        self.exited = False
+
+    def __enter__(self) -> None:
+        self.entered = True
+
+    def __exit__(self, *args: object) -> None:
+        self.exited = True
+
+
+class TerminalStatusConsole:
+    is_terminal = True
+    is_dumb_terminal = True
+
+    def __init__(self) -> None:
+        self.status_context = StatusContext()
+        self.status_calls: list[tuple[str, str]] = []
+
+    def status(self, status: str, *, spinner: str) -> StatusContext:
+        self.status_calls.append((status, spinner))
+        return self.status_context
+
+    def print(self, *args: object, **kwargs: object) -> None:
+        raise AssertionError("terminal consoles should render subprocess status via status()")
+
+
 def test_format_command_shell_quotes_arguments() -> None:
     command = format_command(["python", "-c", "print(1)"], cwd=Path("/tmp/space dir"))
 
@@ -19,7 +47,10 @@ def test_format_command_without_cwd_only_renders_command() -> None:
     assert command == "git status --short"
 
 
-def test_subprocess_runner_returns_stdout_and_writes_status_to_stderr() -> None:
+def test_subprocess_runner_returns_stdout_and_writes_status_to_stderr(
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("TERM", "xterm")
     stderr = io.StringIO()
     console = Console(
         file=stderr,
@@ -39,6 +70,19 @@ def test_subprocess_runner_returns_stdout_and_writes_status_to_stderr() -> None:
     assert sys.executable in status_output
     assert "-c" in status_output
     assert "print" in status_output
+
+
+def test_subprocess_runner_uses_status_for_terminal_console() -> None:
+    console = TerminalStatusConsole()
+    runner = SubprocessRunner(console=console)
+
+    with runner.status(["git", "status"], cwd=Path("/tmp/repo")):
+        assert console.status_context.entered
+
+    assert console.status_context.exited
+    assert console.status_calls == [
+        ("Running cd /tmp/repo && git status", "dots"),
+    ]
 
 
 def test_subprocess_runner_skips_status_for_non_terminal_console() -> None:

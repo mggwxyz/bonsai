@@ -39,11 +39,10 @@ class SubprocessRunner:
     def status(self, argv: list[str], cwd: Path | None):
         if not self.console.is_terminal:
             return nullcontext()
-        message = f"Running {format_command(argv, cwd=cwd)}"
-        if self.console.is_dumb_terminal:
-            self.console.print(message, soft_wrap=True)
-            return nullcontext()
-        return self.console.status(message, spinner="dots")
+        return self.console.status(
+            f"Running {format_command(argv, cwd=cwd)}",
+            spinner="dots",
+        )
 
     def run(
         self,
