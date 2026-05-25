@@ -16,6 +16,18 @@ class Bonsai < Formula
     virtualenv_install_with_resources
   end
 
+  def caveats
+    <<~EOS
+      To enable `bonsai checkout <worktree>` in zsh, add this to ~/.zshrc:
+
+        eval "$(bonsai shell-init zsh)"
+
+      Or run:
+
+        bonsai install-shell zsh
+    EOS
+  end
+
   test do
     system bin/"bonsai", "--version"
   end

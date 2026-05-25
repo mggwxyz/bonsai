@@ -6,7 +6,7 @@ from rich.console import Console
 
 from bonsai import __version__
 from bonsai.config import load_config
-from bonsai.errors import BonsaiConfigError, BonsaiError
+from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.onboarding import (
     ProjectDefaults,
@@ -15,11 +15,37 @@ from bonsai.onboarding import (
     write_starter_config,
 )
 from bonsai.process import SubprocessRunner
+from bonsai.state import load_state
 from bonsai.workflows import execute_add, execute_clone
 from bonsai.workspace import find_workspace_root
 
 console = Console()
 app = typer.Typer(help="Manage git worktree development workspaces.")
+
+ZSH_SHELL_INIT = """bonsai() {
+  if [[ "$1" == "checkout" ]]; then
+    shift
+    local path
+    local status
+    path="$(command bonsai checkout --path "$@")"
+    status=$?
+    if [[ $status -ne 0 ]]; then
+      printf "%s\\n" "$path" >&2
+      return $status
+    fi
+    cd "$path"
+  else
+    command bonsai "$@"
+  fi
+}
+"""
+SHELL_INTEGRATION_START = "# >>> bonsai shell integration >>>"
+SHELL_INTEGRATION_END = "# <<< bonsai shell integration <<<"
+ZSH_INTEGRATION_BLOCK = (
+    f"{SHELL_INTEGRATION_START}\n"
+    'eval "$(bonsai shell-init zsh)"\n'
+    f"{SHELL_INTEGRATION_END}\n"
+)
 
 
 def _version_callback(value: bool) -> None:
@@ -110,6 +136,22 @@ def _guided_config_initializer(
     console.print("Review and commit this file so teammates can use Bonsai too.")
 
 
+def _resolve_worktree_path(workspace_root: Path, name: str) -> Path:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    if name in {state.default_branch, state.default_worktree}:
+        return workspace_root / state.default_worktree
+
+    worktree = state.worktrees.get(name)
+    if worktree is None:
+        for candidate in state.worktrees.values():
+            if name in {candidate.path, candidate.slug}:
+                worktree = candidate
+                break
+    if worktree is None:
+        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
+    return workspace_root / worktree.path
+
+
 @app.command()
 def clone(
     git_url: str,
@@ -167,6 +209,63 @@ def add(branch: str) -> None:
         plan = execute_add(SubprocessRunner(), branch, root_path)
         console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print(f"Port slot: {plan.slot}")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command()
+def checkout(
+    name: str,
+    path: Annotated[
+        bool,
+        typer.Option("--path", help="Print the resolved worktree path for shell integration."),
+    ] = False,
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        worktree_path = _resolve_worktree_path(root_path, name)
+        if path:
+            typer.echo(str(worktree_path))
+            return
+        console.print("Shell integration is required for checkout to change directories.")
+        console.print(f"Resolved worktree: {worktree_path}")
+        console.print('Run: eval "$(bonsai shell-init zsh)"')
+        raise typer.Exit(code=1)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("shell-init")
+def shell_init(shell: str) -> None:
+    try:
+        if shell != "zsh":
+            raise BonsaiConfigError(f"Unsupported shell: {shell}")
+        typer.echo(ZSH_SHELL_INIT, nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("install-shell")
+def install_shell(shell: str) -> None:
+    try:
+        if shell != "zsh":
+            raise BonsaiConfigError(f"Unsupported shell: {shell}")
+        zshrc = Path.home() / ".zshrc"
+        existing = zshrc.read_text(encoding="utf-8") if zshrc.exists() else ""
+        if SHELL_INTEGRATION_START in existing:
+            console.print("zsh integration already installed")
+            return
+
+        content = existing
+        if content and not content.endswith("\n"):
+            content += "\n"
+        if content and not content.endswith("\n\n"):
+            content += "\n"
+        content += ZSH_INTEGRATION_BLOCK
+
+        zshrc.parent.mkdir(parents=True, exist_ok=True)
+        zshrc.write_text(content, encoding="utf-8")
+        console.print(f"Installed zsh integration in {zshrc}")
     except BonsaiError as exc:
         _fail(exc)
 

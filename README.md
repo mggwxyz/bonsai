@@ -57,6 +57,7 @@ url = "https://${slug}.my-app.localhost"
 bonsai clone git@github.com:org/my-app.git my-app
 bonsai init
 bonsai add ma-123-implement-auth
+bonsai checkout ma-123-implement-auth
 bonsai list
 bonsai sync
 bonsai cleanup
@@ -69,3 +70,22 @@ for the initial checkout directory.
 `bonsai init` runs the same guided `.bonsai.toml` setup inside an existing
 checkout. Review and commit the generated file so teammates get the same Bonsai
 workspace behavior.
+
+## Shell Integration
+
+`bonsai checkout <worktree>` needs shell integration because a CLI child process
+cannot change its parent shell directory. Add this to `~/.zshrc`:
+
+```zsh
+eval "$(bonsai shell-init zsh)"
+```
+
+Or let Bonsai append the marked block for you:
+
+```bash
+bonsai install-shell zsh
+```
+
+After opening a new shell, `bonsai checkout ma-123-implement-auth` changes into
+the matching worktree. The lookup accepts the branch name or the worktree
+directory name.

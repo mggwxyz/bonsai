@@ -5,8 +5,32 @@ from typer.testing import CliRunner
 
 from bonsai import cli
 from bonsai.errors import BonsaiWorkspaceError
+from bonsai.models import BonsaiState, ManagedWorktree
+from bonsai.state import save_state
 
 runner = CliRunner()
+
+
+def write_checkout_workspace(root: Path) -> None:
+    (root / "main").mkdir(parents=True)
+    (root / "ma-123-test").mkdir()
+    save_state(
+        root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={
+                "MA-123-test": ManagedWorktree(
+                    path="ma-123-test",
+                    slug="ma-123-test",
+                    slot=1,
+                )
+            },
+        ),
+    )
 
 
 def test_version_flag_prints_version() -> None:
@@ -22,6 +46,9 @@ def test_help_lists_core_commands() -> None:
     assert result.exit_code == 0
     assert "clone" in result.stdout
     assert "add" in result.stdout
+    assert "checkout" in result.stdout
+    assert "shell-init" in result.stdout
+    assert "install-shell" in result.stdout
     assert "init" in result.stdout
     assert "doctor" in result.stdout
 
@@ -201,6 +228,81 @@ def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(calls[1][1], FakeRunner)
     assert calls[1][2:] == ("MA-123-test", workspace_root)
     assert "Add workflow ready" not in result.stdout
+
+
+def test_checkout_path_resolves_worktree_by_branch(monkeypatch, tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "MA-123-test"])
+
+    assert result.exit_code == 0
+    assert Path(result.stdout.strip()).samefile(tmp_path / "ma-123-test")
+
+
+def test_checkout_path_resolves_worktree_by_path(monkeypatch, tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "ma-123-test"])
+
+    assert result.exit_code == 0
+    assert Path(result.stdout.strip()).samefile(tmp_path / "ma-123-test")
+
+
+def test_checkout_path_reports_unknown_worktree(monkeypatch, tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "missing"])
+
+    assert result.exit_code == 1
+    assert "Error: Unknown worktree: missing" in result.stdout
+
+
+def test_shell_init_zsh_prints_checkout_wrapper() -> None:
+    result = runner.invoke(cli.app, ["shell-init", "zsh"])
+
+    assert result.exit_code == 0
+    assert "bonsai() {" in result.stdout
+    assert 'if [[ "$1" == "checkout" ]]; then' in result.stdout
+    assert "shift" in result.stdout
+    assert 'path="$(command bonsai checkout --path "$@")"' in result.stdout
+    assert "status=$?" in result.stdout
+    assert 'printf "%s\\n" "$path" >&2' in result.stdout
+    assert "return $status" in result.stdout
+    assert 'cd "$path"' in result.stdout
+    assert 'command bonsai "$@"' in result.stdout
+
+
+def test_install_shell_zsh_appends_integration_block(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# existing config\n", encoding="utf-8")
+
+    result = runner.invoke(cli.app, ["install-shell", "zsh"])
+
+    assert result.exit_code == 0
+    assert "Installed zsh integration" in result.stdout
+    text = zshrc.read_text(encoding="utf-8")
+    assert "# existing config" in text
+    assert "# >>> bonsai shell integration >>>" in text
+    assert 'eval "$(bonsai shell-init zsh)"' in text
+    assert "# <<< bonsai shell integration <<<" in text
+
+
+def test_install_shell_zsh_is_idempotent(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+
+    first = runner.invoke(cli.app, ["install-shell", "zsh"])
+    second = runner.invoke(cli.app, ["install-shell", "zsh"])
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    assert "zsh integration already installed" in second.stdout
+    text = (tmp_path / ".zshrc").read_text(encoding="utf-8")
+    assert text.count("# >>> bonsai shell integration >>>") == 1
+    assert text.count('eval "$(bonsai shell-init zsh)"') == 1
 
 
 def test_list_command_exists() -> None:
