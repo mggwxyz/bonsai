@@ -59,6 +59,5 @@ bonsai cleanup
 bonsai doctor
 ```
 
-These commands describe the target v1 workflow. The current CLI is still in progress, and commands such as `bonsai clone` and `bonsai add` may print readiness text before the full workflow is enabled.
-
-`bonsai clone` discovers the repository default branch and uses that branch name for the initial checkout directory.
+`bonsai clone` discovers the repository default branch and uses that branch name
+for the initial checkout directory.
