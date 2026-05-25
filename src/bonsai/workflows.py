@@ -34,6 +34,8 @@ from bonsai.models import (
     OpenUrlPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
+    SyncFileAction,
+    SyncPlan,
     WorktreeTarget,
 )
 from bonsai.ports import allocate_slot
@@ -258,6 +260,57 @@ def _configured_worktree_targets(
         for branch, worktree in state.worktrees.items()
     )
     return (default, *managed)
+
+
+def _desired_sync_files(
+    config: BonsaiConfig,
+    state: BonsaiState,
+    workspace_root: Path,
+) -> dict[Path, str]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
+    snippets_dir = workspace_root / snippets_dir_name
+    desired: dict[Path, str] = {
+        workspace_root / root_caddyfile: render_root_caddyfile(snippets_dir),
+    }
+    for target in _configured_worktree_targets(state, workspace_root):
+        desired[target.worktree_path / ".env.local"] = render_env_local(
+            config,
+            target.branch,
+            target.worktree.slot,
+            target.worktree_path,
+        )
+        for service_name, content in render_caddy_snippets(
+            config,
+            target.branch,
+            target.worktree.slot,
+            target.worktree_path,
+        ).items():
+            service_name = _safe_path_segment(service_name, "service name")
+            desired[snippets_dir / f"{target.worktree.slug}-{service_name}.caddy"] = content
+    return desired
+
+
+def plan_sync(workspace_root: Path) -> SyncPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    desired = _desired_sync_files(config, state, workspace_root)
+    actions: list[SyncFileAction] = []
+    for path, content in sorted(desired.items(), key=lambda item: str(item[0])):
+        if not path.exists() or path.read_text(encoding="utf-8") != content:
+            actions.append(SyncFileAction(kind="write", path=path, content=content))
+    return SyncPlan(actions=tuple(actions), reload_caddy=bool(config.public_services()))
+
+
+def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> SyncPlan:
+    plan = plan_sync(workspace_root)
+    if not apply:
+        return plan
+    for action in plan.actions:
+        if action.kind == "write" and action.content is not None:
+            action.path.parent.mkdir(parents=True, exist_ok=True)
+            action.path.write_text(action.content, encoding="utf-8")
+    return plan
 
 
 def resolve_start_target(

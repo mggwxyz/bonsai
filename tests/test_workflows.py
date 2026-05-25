@@ -33,9 +33,11 @@ from bonsai.workflows import (
     execute_clone,
     execute_remove,
     execute_start,
+    execute_sync,
     plan_add_files,
     plan_clone_workspace,
     plan_open_url,
+    plan_sync,
     resolve_start_target,
     write_files,
 )
@@ -253,6 +255,60 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
     assert plan.symlinks[0].target == (
         tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots" / ".env"
     )
+
+
+def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    (feature_worktree / ".env.local").write_text("STALE=1\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_sync(workspace_root)
+
+    actions = {(action.kind, action.path.relative_to(workspace_root)) for action in plan.actions}
+    assert ("write", Path("main/.env.local")) in actions
+    assert ("write", Path("feature/.env.local")) in actions
+    assert ("write", Path("Caddyfile")) in actions
+    assert ("write", Path("caddy.d/main-frontend.caddy")) in actions
+    assert ("write", Path("caddy.d/feature-frontend.caddy")) in actions
+    assert plan.reload_caddy is True
+
+
+def test_execute_sync_dry_run_does_not_write_files(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_sync(RecordingRunner(), workspace_root, apply=False)
+
+    assert any(action.path == default_worktree / ".env.local" for action in plan.actions)
+    assert not (default_worktree / ".env.local").exists()
 
 
 def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) -> None:

@@ -133,6 +133,19 @@ class FileSymlink:
 
 
 @dataclass(frozen=True)
+class SyncFileAction:
+    kind: str
+    path: Path
+    content: str | None = None
+
+
+@dataclass(frozen=True)
+class SyncPlan:
+    actions: tuple[SyncFileAction, ...]
+    reload_caddy: bool
+
+
+@dataclass(frozen=True)
 class CloneWorkspacePlan:
     workspace_root: Path
     default_worktree: Path
