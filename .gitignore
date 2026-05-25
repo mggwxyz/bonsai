@@ -49,6 +49,7 @@ coverage.xml
 *.py.cover
 .hypothesis/
 .pytest_cache/
+.ruff_cache/
 cover/
 
 # Translations
@@ -70,6 +71,9 @@ instance/
 
 # Sphinx documentation
 docs/_build/
+
+# Superpowers local planning artifacts
+docs/superpowers/
 
 # PyBuilder
 .pybuilder/
@@ -150,6 +154,7 @@ activemq-data/
 # Environments
 .env
 .envrc
+.venv/
 .venv
 env/
 venv/
