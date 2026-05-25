@@ -1,3 +1,5 @@
+import shutil
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -267,12 +269,57 @@ def test_shell_init_zsh_prints_checkout_wrapper() -> None:
     assert "bonsai() {" in result.stdout
     assert 'if [[ "$1" == "checkout" ]]; then' in result.stdout
     assert "shift" in result.stdout
-    assert 'path="$(command bonsai checkout --path "$@")"' in result.stdout
-    assert "status=$?" in result.stdout
+    assert 'bonsai_bin="${commands[bonsai]}"' in result.stdout
+    assert 'path="$("$bonsai_bin" checkout --path "$@")"' in result.stdout
+    assert "bonsai_exit=$?" in result.stdout
     assert 'printf "%s\\n" "$path" >&2' in result.stdout
-    assert "return $status" in result.stdout
+    assert "return $bonsai_exit" in result.stdout
     assert 'cd "$path"' in result.stdout
-    assert 'command bonsai "$@"' in result.stdout
+    assert '"$bonsai_bin" "$@"' in result.stdout
+
+
+def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path: Path) -> None:
+    zsh = shutil.which("zsh")
+    if zsh is None:
+        return
+
+    target = tmp_path / "worktree"
+    target.mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake_bonsai = bin_dir / "bonsai"
+    fake_bonsai.write_text(
+        "#!/bin/sh\n"
+        'if [ "$1" = "checkout" ] && [ "$2" = "--path" ] && [ "$3" = "feature" ]; then\n'
+        '  printf "%s\\n" "$BONSAI_TEST_TARGET"\n'
+        "  exit 0\n"
+        "fi\n"
+        'printf "unexpected args: %s\\n" "$*" >&2\n'
+        "exit 2\n",
+        encoding="utf-8",
+    )
+    fake_bonsai.chmod(0o755)
+
+    script = (
+        cli.ZSH_SHELL_INIT
+        + "\n"
+        + "bonsai checkout feature\n"
+        + "pwd\n"
+    )
+    result = subprocess.run(
+        [zsh, "-fc", script],
+        cwd=tmp_path,
+        env={
+            "PATH": f"{bin_dir}",
+            "BONSAI_TEST_TARGET": str(target),
+        },
+        text=True,
+        capture_output=True,
+        check=False,
+    )
+
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == str(target)
 
 
 def test_install_shell_zsh_appends_integration_block(monkeypatch, tmp_path: Path) -> None:

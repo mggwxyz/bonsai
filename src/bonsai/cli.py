@@ -23,19 +23,25 @@ console = Console()
 app = typer.Typer(help="Manage git worktree development workspaces.")
 
 ZSH_SHELL_INIT = """bonsai() {
+  local bonsai_bin="${commands[bonsai]}"
+  if [[ -z "$bonsai_bin" ]]; then
+    printf "%s\\n" "bonsai executable not found in PATH" >&2
+    return 127
+  fi
+
   if [[ "$1" == "checkout" ]]; then
     shift
     local path
-    local status
-    path="$(command bonsai checkout --path "$@")"
-    status=$?
-    if [[ $status -ne 0 ]]; then
+    local bonsai_exit
+    path="$("$bonsai_bin" checkout --path "$@")"
+    bonsai_exit=$?
+    if [[ $bonsai_exit -ne 0 ]]; then
       printf "%s\\n" "$path" >&2
-      return $status
+      return $bonsai_exit
     fi
     cd "$path"
   else
-    command bonsai "$@"
+    "$bonsai_bin" "$@"
   fi
 }
 """
