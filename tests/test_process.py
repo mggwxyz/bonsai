@@ -3,6 +3,7 @@ import sys
 from pathlib import Path
 
 from rich.console import Console
+from rich.text import Text
 
 from bonsai.process import SubprocessRunner, format_command
 
@@ -25,9 +26,9 @@ class TerminalStatusConsole:
 
     def __init__(self) -> None:
         self.status_context = StatusContext()
-        self.status_calls: list[tuple[str, str]] = []
+        self.status_calls: list[tuple[object, str]] = []
 
-    def status(self, status: str, *, spinner: str) -> StatusContext:
+    def status(self, status: object, *, spinner: str) -> StatusContext:
         self.status_calls.append((status, spinner))
         return self.status_context
 
@@ -72,6 +73,26 @@ def test_subprocess_runner_returns_stdout_and_writes_status_to_stderr(
     assert "print" in status_output
 
 
+def test_subprocess_runner_status_treats_command_as_literal_text(monkeypatch) -> None:
+    monkeypatch.setenv("TERM", "xterm")
+    stderr = io.StringIO()
+    console = Console(
+        file=stderr,
+        force_terminal=True,
+        color_system=None,
+        width=120,
+    )
+    runner = SubprocessRunner(console=console)
+
+    result = runner.run([sys.executable, "-c", "print('[/]')"])
+
+    assert result.returncode == 0
+    assert result.stdout == "[/]\n"
+    status_output = stderr.getvalue()
+    assert "Running" in status_output
+    assert "[/]" in status_output
+
+
 def test_subprocess_runner_uses_status_for_terminal_console() -> None:
     console = TerminalStatusConsole()
     runner = SubprocessRunner(console=console)
@@ -80,9 +101,11 @@ def test_subprocess_runner_uses_status_for_terminal_console() -> None:
         assert console.status_context.entered
 
     assert console.status_context.exited
-    assert console.status_calls == [
-        ("Running cd /tmp/repo && git status", "dots"),
-    ]
+    assert len(console.status_calls) == 1
+    status, spinner = console.status_calls[0]
+    assert isinstance(status, Text)
+    assert status.plain == "Running cd /tmp/repo && git status"
+    assert spinner == "dots"
 
 
 def test_subprocess_runner_skips_status_for_non_terminal_console() -> None:

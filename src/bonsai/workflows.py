@@ -282,7 +282,7 @@ def apply_symlinks(symlinks: tuple[FileSymlink, ...]) -> None:
 
 
 def command_summary(command: CommandSpec) -> str:
-    return format_command(list(command.argv), cwd=command.cwd)
+    return format_command(command.argv, cwd=command.cwd)
 
 
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
