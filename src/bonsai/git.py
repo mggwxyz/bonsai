@@ -14,12 +14,12 @@ def parse_default_branch(ls_remote_output: str) -> str:
 
 
 def discover_default_branch(runner: Runner, git_url: str) -> str:
-    result = runner.run(["git", "ls-remote", "--symref", git_url, "HEAD"])
+    result = runner.run(["git", "ls-remote", "--symref", "--", git_url, "HEAD"])
     return parse_default_branch(result.stdout)
 
 
 def clone_default_branch(runner: Runner, git_url: str, branch: str, target: Path) -> None:
-    runner.run(["git", "clone", "--branch", branch, git_url, str(target)])
+    runner.run(["git", "clone", "--branch", branch, "--", git_url, str(target)])
 
 
 def fetch_origin(runner: Runner, repo: Path) -> None:
@@ -29,7 +29,6 @@ def fetch_origin(runner: Runner, repo: Path) -> None:
 def remote_branch_exists(runner: Runner, repo: Path, branch: str) -> bool:
     result = runner.run(
         ["git", "-C", str(repo), "ls-remote", "--heads", "origin", branch],
-        check=False,
     )
     return bool(result.stdout.strip())
 
