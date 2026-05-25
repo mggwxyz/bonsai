@@ -22,7 +22,10 @@ Bonsai is published from the personal Homebrew tap at
 
 ## Repository Config
 
-Each managed repository commits `.bonsai.toml` at its root.
+Each managed repository commits `.bonsai.toml` at its root. If the file is
+missing during `bonsai clone`, Bonsai starts a short guided setup and writes a
+starter config before continuing. Use `--no-interactive` to fail instead of
+prompting.
 
 ```toml
 name = "my-app"
@@ -52,6 +55,7 @@ url = "https://${slug}.my-app.localhost"
 
 ```bash
 bonsai clone git@github.com:org/my-app.git my-app
+bonsai init
 bonsai add ma-123-implement-auth
 bonsai list
 bonsai sync
@@ -61,3 +65,7 @@ bonsai doctor
 
 `bonsai clone` discovers the repository default branch and uses that branch name
 for the initial checkout directory.
+
+`bonsai init` runs the same guided `.bonsai.toml` setup inside an existing
+checkout. Review and commit the generated file so teammates get the same Bonsai
+workspace behavior.
