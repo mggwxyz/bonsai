@@ -4,6 +4,7 @@ import shlex
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
+from bonsai.caddy import caddy_reload_plan
 from bonsai.config import load_config
 from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
@@ -321,6 +322,12 @@ def run_worktree_command(
     runner.run(shlex.split(command), cwd=cwd, env=env)
 
 
+def reload_workspace_caddy(runner: Runner, config: BonsaiConfig, workspace_root: Path) -> None:
+    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
+    command = caddy_reload_plan(workspace_root / root_caddyfile)
+    runner.run(list(command.argv), cwd=command.cwd)
+
+
 def execute_clone(
     runner: Runner,
     git_url: str,
@@ -379,6 +386,7 @@ def execute_add(
     apply_symlinks(plan.symlinks)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
+    reload_workspace_caddy(runner, config, workspace_root)
     command_env = generated_worktree_env(plan.files)
     if config.commands.install:
         run_worktree_command(runner, config.commands.install, plan.worktree_path, command_env)
@@ -437,6 +445,7 @@ def execute_remove(
     removed_snippets = _remove_generated_snippets(workspace_root, config, resolved.worktree.slug)
     updated_state = remove_worktree(state, resolved.branch)
     save_state(state_path, updated_state)
+    reload_workspace_caddy(runner, config, workspace_root)
     return RemoveWorktreePlan(
         branch=resolved.branch,
         worktree_path=worktree_path,

@@ -650,6 +650,33 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
     assert (workspace_root / "outside" / ".env").resolve() == default_worktree / ".env"
 
 
+def test_execute_add_reloads_workspace_caddyfile_after_writing_snippets(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert (workspace_root / "caddy.d" / "feature-frontend.caddy").exists()
+    assert CommandSpec(
+        argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))
+    ) in runner.commands
+
+
 def test_execute_add_prefers_workspace_root_config_over_repo_config(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
@@ -1090,6 +1117,7 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
                 str(branch_worktree),
             )
         ),
+        CommandSpec(argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))),
     ]
 
 
@@ -1170,7 +1198,7 @@ def test_execute_remove_forces_dirty_worktree_when_requested(tmp_path: Path) -> 
 
     execute_remove(runner, "feature", workspace_root, force=True)
 
-    assert runner.commands[-1].argv == (
+    assert runner.commands[-2].argv == (
         "git",
         "-C",
         str(default_worktree),
@@ -1178,6 +1206,12 @@ def test_execute_remove_forces_dirty_worktree_when_requested(tmp_path: Path) -> 
         "remove",
         "--force",
         str(branch_worktree),
+    )
+    assert runner.commands[-1].argv == (
+        "caddy",
+        "reload",
+        "--config",
+        str(workspace_root / "Caddyfile"),
     )
     assert load_state(workspace_root / ".bonsai" / "state.json").worktrees == {}
 
