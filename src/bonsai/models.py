@@ -93,3 +93,16 @@ class WorkspacePaths:
     state_file: Path
     caddyfile: Path
     snippets_dir: Path
+
+
+@dataclass(frozen=True)
+class CommandSpec:
+    argv: tuple[str, ...]
+    cwd: Path | None = None
+
+
+@dataclass(frozen=True)
+class CommandResult:
+    returncode: int
+    stdout: str = ""
+    stderr: str = ""
