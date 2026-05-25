@@ -4,6 +4,7 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
+from rich.table import Table
 
 from bonsai import __version__
 from bonsai.config import load_config
@@ -319,7 +320,16 @@ def install_shell(shell: str) -> None:
 def list_worktrees() -> None:
     try:
         root_path = find_workspace_root(Path.cwd())
-        console.print(f"Listing worktrees for {root_path}")
+        state = load_state(root_path / ".bonsai" / "state.json")
+        table = Table(title=f"Worktrees for {state.name}")
+        table.add_column("Branch")
+        table.add_column("Path")
+        table.add_column("Slot", justify="right")
+        table.add_column("Kind")
+        table.add_row(state.default_branch, state.default_worktree, "0", "default")
+        for branch, worktree in sorted(state.worktrees.items(), key=lambda item: item[0].lower()):
+            table.add_row(branch, worktree.path, str(worktree.slot), "managed")
+        console.print(table)
     except BonsaiError as exc:
         _fail(exc)
 

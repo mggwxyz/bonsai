@@ -552,12 +552,19 @@ def test_install_shell_zsh_is_idempotent(monkeypatch, tmp_path: Path) -> None:
     assert text.count('eval "$(bonsai shell-init zsh)"') == 1
 
 
-def test_list_command_exists() -> None:
-    with runner.isolated_filesystem():
-        Path(".bonsai").mkdir()
-        result = runner.invoke(cli.app, ["list"])
+def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["list"])
 
     assert result.exit_code == 0
+    assert "Worktrees for authentic" in result.stdout
+    assert "main" in result.stdout
+    assert "MA-123-test" in result.stdout
+    assert "ma-123-test" in result.stdout
+    assert "default" in result.stdout
+    assert "managed" in result.stdout
 
 
 def test_sync_dry_run_command_exists() -> None:
