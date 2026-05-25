@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 import subprocess
 from collections.abc import Mapping
 from pathlib import Path
@@ -8,6 +9,13 @@ from typing import Protocol
 
 from bonsai.errors import BonsaiCommandError
 from bonsai.models import CommandResult, CommandSpec
+
+
+def format_command(argv: list[str], cwd: Path | None = None) -> str:
+    rendered = " ".join(shlex.quote(arg) for arg in argv)
+    if cwd is None:
+        return rendered
+    return f"cd {shlex.quote(str(cwd))} && {rendered}"
 
 
 class Runner(Protocol):

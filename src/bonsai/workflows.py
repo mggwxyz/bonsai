@@ -36,7 +36,7 @@ from bonsai.models import (
     ResolvedWorktree,
 )
 from bonsai.ports import allocate_slot
-from bonsai.process import Runner
+from bonsai.process import Runner, format_command
 from bonsai.rendering import (
     render_caddy_snippets,
     render_env_local,
@@ -282,10 +282,7 @@ def apply_symlinks(symlinks: tuple[FileSymlink, ...]) -> None:
 
 
 def command_summary(command: CommandSpec) -> str:
-    rendered = " ".join(shlex.quote(arg) for arg in command.argv)
-    if command.cwd is None:
-        return rendered
-    return f"cd {shlex.quote(str(command.cwd))} && {rendered}"
+    return format_command(list(command.argv), cwd=command.cwd)
 
 
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
