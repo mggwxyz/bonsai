@@ -35,6 +35,13 @@ def write_release_fixture(root: Path) -> None:
         'url "https://github.com/mggwxyz/bonsai.git", tag: "v0.1.2"\n',
         encoding="utf-8",
     )
+    (root / "uv.lock").write_text(
+        (
+            '[[package]]\nname = "bonsai"\nversion = "0.1.2"\n\n'
+            '[[package]]\nname = "mdurl"\nversion = "0.1.2"\n'
+        ),
+        encoding="utf-8",
+    )
 
 
 def test_bump_project_versions_updates_release_files(tmp_path: Path) -> None:
@@ -54,6 +61,9 @@ def test_bump_project_versions_updates_release_files(tmp_path: Path) -> None:
     assert 'tag: "v0.1.3"' in (tmp_path / "Formula" / "bonsai.rb").read_text(
         encoding="utf-8"
     )
+    lockfile = (tmp_path / "uv.lock").read_text(encoding="utf-8")
+    assert 'name = "bonsai"\nversion = "0.1.3"' in lockfile
+    assert 'name = "mdurl"\nversion = "0.1.2"' in lockfile
 
 
 def test_sync_tap_formula_copies_project_formula(tmp_path: Path) -> None:
@@ -84,6 +94,7 @@ def test_project_publish_commands_commit_tag_and_push() -> None:
             "src/bonsai/__init__.py",
             "tests/test_cli.py",
             "Formula/bonsai.rb",
+            "uv.lock",
         ],
         ["git", "commit", "-m", "chore: release 0.1.3"],
         ["git", "tag", "v0.1.3"],

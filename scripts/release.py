@@ -14,6 +14,7 @@ PROJECT_VERSION_FILES = (
     Path("src/bonsai/__init__.py"),
     Path("tests/test_cli.py"),
     Path("Formula/bonsai.rb"),
+    Path("uv.lock"),
 )
 
 
@@ -39,6 +40,16 @@ def replace_exact(path: Path, old: str, new: str) -> None:
     path.write_text(updated, encoding="utf-8")
 
 
+def bump_uv_lock_project_version(path: Path, old_version: str, new_version: str) -> None:
+    text = path.read_text(encoding="utf-8")
+    old_block = f'[[package]]\nname = "bonsai"\nversion = "{old_version}"'
+    new_block = f'[[package]]\nname = "bonsai"\nversion = "{new_version}"'
+    updated = text.replace(old_block, new_block, 1)
+    if updated == text:
+        raise RuntimeError(f"Expected to replace bonsai package version in {path}")
+    path.write_text(updated, encoding="utf-8")
+
+
 def bump_project_versions(repo: Path, new_version: str) -> str:
     new_version = validate_version(new_version)
     old_version = read_project_version(repo)
@@ -57,6 +68,9 @@ def bump_project_versions(repo: Path, new_version: str) -> str:
     )
     replace_exact(repo / "tests/test_cli.py", f"bonsai {old_version}", f"bonsai {new_version}")
     replace_exact(repo / "Formula/bonsai.rb", f'tag: "v{old_version}"', f'tag: "v{new_version}"')
+    lockfile = repo / "uv.lock"
+    if lockfile.exists():
+        bump_uv_lock_project_version(lockfile, old_version, new_version)
     return old_version
 
 
