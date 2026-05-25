@@ -31,9 +31,9 @@ base_branch = "main"
 default_parent = "~/Projects"
 
 [commands]
-install = "yarn install"
-start = "yarn dev"
-migrate = "yarn docker:migrate --abort-on-container-exit"
+install = "npm install"
+start = "npm dev"
+migrate = "npm db:migrate"
 
 [[env]]
 name = "COMPOSE_PROJECT_NAME"
