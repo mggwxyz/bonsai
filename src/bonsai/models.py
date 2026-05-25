@@ -67,3 +67,29 @@ class BonsaiConfig:
             if service.primary:
                 return service
         raise ValueError("No primary public service configured")
+
+
+@dataclass(frozen=True)
+class ManagedWorktree:
+    path: str
+    slug: str
+    slot: int
+
+
+@dataclass(frozen=True)
+class BonsaiState:
+    version: int
+    name: str
+    default_branch: str
+    default_worktree: str
+    repo_url: str
+    worktrees: dict[str, ManagedWorktree]
+
+
+@dataclass(frozen=True)
+class WorkspacePaths:
+    root: Path
+    default_worktree: Path
+    state_file: Path
+    caddyfile: Path
+    snippets_dir: Path
