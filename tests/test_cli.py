@@ -270,11 +270,11 @@ def test_shell_init_zsh_prints_checkout_wrapper() -> None:
     assert 'if [[ "$1" == "checkout" ]]; then' in result.stdout
     assert "shift" in result.stdout
     assert 'bonsai_bin="${commands[bonsai]}"' in result.stdout
-    assert 'path="$("$bonsai_bin" checkout --path "$@")"' in result.stdout
+    assert 'checkout_path="$("$bonsai_bin" checkout --path "$@")"' in result.stdout
     assert "bonsai_exit=$?" in result.stdout
-    assert 'printf "%s\\n" "$path" >&2' in result.stdout
+    assert 'printf "%s\\n" "$checkout_path" >&2' in result.stdout
     assert "return $bonsai_exit" in result.stdout
-    assert 'cd "$path"' in result.stdout
+    assert 'cd "$checkout_path"' in result.stdout
     assert '"$bonsai_bin" "$@"' in result.stdout
 
 
@@ -285,6 +285,7 @@ def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path
 
     target = tmp_path / "worktree"
     target.mkdir()
+    path_capture = tmp_path / "hook-path.txt"
     bin_dir = tmp_path / "bin"
     bin_dir.mkdir()
     fake_bonsai = bin_dir / "bonsai"
@@ -303,6 +304,11 @@ def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path
     script = (
         cli.ZSH_SHELL_INIT
         + "\n"
+        + "chpwd_capture_path() {\n"
+        + '  print -r -- "$PATH" > "$BONSAI_TEST_PATH_CAPTURE"\n'
+        + "}\n"
+        + "typeset -ag chpwd_functions\n"
+        + "chpwd_functions+=(chpwd_capture_path)\n"
         + "bonsai checkout feature\n"
         + "pwd\n"
     )
@@ -312,6 +318,7 @@ def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path
         env={
             "PATH": f"{bin_dir}",
             "BONSAI_TEST_TARGET": str(target),
+            "BONSAI_TEST_PATH_CAPTURE": str(path_capture),
         },
         text=True,
         capture_output=True,
@@ -320,6 +327,7 @@ def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path
 
     assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == str(target)
+    assert path_capture.read_text(encoding="utf-8").strip() == str(bin_dir)
 
 
 def test_install_shell_zsh_appends_integration_block(monkeypatch, tmp_path: Path) -> None:

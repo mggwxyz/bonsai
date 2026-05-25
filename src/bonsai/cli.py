@@ -31,15 +31,15 @@ ZSH_SHELL_INIT = """bonsai() {
 
   if [[ "$1" == "checkout" ]]; then
     shift
-    local path
+    local checkout_path
     local bonsai_exit
-    path="$("$bonsai_bin" checkout --path "$@")"
+    checkout_path="$("$bonsai_bin" checkout --path "$@")"
     bonsai_exit=$?
     if [[ $bonsai_exit -ne 0 ]]; then
-      printf "%s\\n" "$path" >&2
+      printf "%s\\n" "$checkout_path" >&2
       return $bonsai_exit
     fi
-    cd "$path"
+    cd "$checkout_path"
   else
     "$bonsai_bin" "$@"
   fi
