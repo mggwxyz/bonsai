@@ -51,7 +51,7 @@ url = "https://${slug}.my-app.localhost"
 
 ```bash
 bonsai clone git@github.com:org/my-app.git my-app
-bonsai add AB-123-implement-auth
+bonsai add ma-123-implement-auth
 bonsai list
 bonsai sync
 bonsai cleanup
