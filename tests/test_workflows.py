@@ -404,7 +404,24 @@ def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> 
 
 
 def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Path) -> None:
-    runner = RecordingRunner()
+    class ExistingWorktreeRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="feature\n")
+            return CommandResult(returncode=0)
+
+    runner = ExistingWorktreeRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
     branch_worktree = workspace_root / "feature"
@@ -431,7 +448,82 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.worktrees["feature"].path == "feature"
     assert all("worktree" not in command.argv for command in runner.commands)
-    assert runner.commands == [CommandSpec(argv=("yarn", "install"), cwd=branch_worktree)]
+    assert runner.commands[-1] == CommandSpec(argv=("yarn", "install"), cwd=branch_worktree)
+
+
+def test_execute_add_rejects_unrelated_existing_directory(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="not a git worktree"):
+        execute_add(runner, "feature", workspace_root)
+
+    assert not (branch_worktree / ".env.local").exists()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert "feature" not in state.worktrees
+    assert all(command.argv != ("yarn", "install") for command in runner.commands)
+
+
+def test_execute_add_rejects_existing_worktree_for_different_branch(tmp_path: Path) -> None:
+    class DifferentBranchRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="other-branch\n")
+            return CommandResult(returncode=0)
+
+    runner = DifferentBranchRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="has branch other-branch"):
+        execute_add(runner, "feature", workspace_root)
+
+    assert not (branch_worktree / ".env.local").exists()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert "feature" not in state.worktrees
+    assert all(command.argv != ("yarn", "install") for command in runner.commands)
 
 
 def test_execute_add_parses_quoted_install_command(tmp_path: Path) -> None:

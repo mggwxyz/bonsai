@@ -33,6 +33,19 @@ def remote_branch_exists(runner: Runner, repo: Path, branch: str) -> bool:
     return bool(result.stdout.strip())
 
 
+def is_git_worktree(runner: Runner, repo: Path) -> bool:
+    result = runner.run(
+        ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
+        check=False,
+    )
+    return result.returncode == 0 and result.stdout.strip() == "true"
+
+
+def current_branch(runner: Runner, repo: Path) -> str:
+    result = runner.run(["git", "-C", str(repo), "rev-parse", "--abbrev-ref", "HEAD"])
+    return result.stdout.strip()
+
+
 def add_existing_worktree(runner: Runner, repo: Path, branch: str, target: Path) -> None:
     runner.run(["git", "-C", str(repo), "worktree", "add", str(target), branch])
 

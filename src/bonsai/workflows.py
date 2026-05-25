@@ -9,8 +9,10 @@ from bonsai.git import (
     add_existing_worktree,
     add_new_worktree,
     clone_default_branch,
+    current_branch,
     discover_default_branch,
     fetch_origin,
+    is_git_worktree,
     remote_branch_exists,
 )
 from bonsai.models import (
@@ -172,7 +174,17 @@ def execute_add(
     plan = plan_add_files(config, state, workspace_root, branch)
     if plan.worktree_path.exists() and not plan.worktree_path.is_dir():
         raise BonsaiWorkspaceError(f"Branch worktree path is not a directory: {plan.worktree_path}")
-    if not plan.worktree_path.exists():
+    if plan.worktree_path.exists():
+        if not is_git_worktree(runner, plan.worktree_path):
+            raise BonsaiWorkspaceError(
+                f"Branch worktree path is not a git worktree: {plan.worktree_path}"
+            )
+        existing_branch = current_branch(runner, plan.worktree_path)
+        if existing_branch != branch:
+            raise BonsaiWorkspaceError(
+                f"Branch worktree path has branch {existing_branch}, expected {branch}"
+            )
+    else:
         base_branch = config.base_branch or state.default_branch
         fetch_origin(runner, default_worktree)
         if remote_branch_exists(runner, default_worktree, branch):
