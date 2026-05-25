@@ -152,9 +152,11 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
         branch="MB-2036-multi-worktree-port-slots",
     )
 
-    assert plan.worktree_path == tmp_path / "authentic" / "MB-2036-multi-worktree-port-slots"
+    assert plan.worktree_path == tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots"
     assert plan.slot == 1
-    assert plan.updated_state.worktrees["MB-2036-multi-worktree-port-slots"].slot == 1
+    worktree = plan.updated_state.worktrees["MB-2036-multi-worktree-port-slots"]
+    assert worktree.path == "mb-2036-multi-worktree-port-slots"
+    assert worktree.slot == 1
     assert ".env.local" in {path.name for path in plan.files}
     assert "mb-2036-multi-worktree-port-slots-frontend.caddy" in {
         path.name for path in plan.files
@@ -236,4 +238,74 @@ def test_plan_add_files_rejects_unsafe_service_name(tmp_path: Path) -> None:
             state=state,
             workspace_root=tmp_path / "authentic",
             branch="MB-2036-multi-worktree-port-slots",
+        )
+
+
+def test_plan_add_files_uses_safe_slug_for_absolute_branch_path(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+    workspace_root = tmp_path / "authentic"
+
+    plan = plan_add_files(
+        config=config,
+        state=state,
+        workspace_root=workspace_root,
+        branch="/tmp/outside",
+    )
+
+    assert plan.branch == "/tmp/outside"
+    assert plan.worktree_path == workspace_root / "tmp-outside"
+    assert plan.worktree_path.is_relative_to(workspace_root)
+    assert plan.updated_state.worktrees["/tmp/outside"].path == "tmp-outside"
+
+
+def test_plan_add_files_uses_safe_slug_for_parent_relative_branch_path(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+    workspace_root = tmp_path / "authentic"
+
+    plan = plan_add_files(
+        config=config,
+        state=state,
+        workspace_root=workspace_root,
+        branch="../outside",
+    )
+
+    assert plan.branch == "../outside"
+    assert plan.worktree_path == workspace_root / "outside"
+    assert plan.worktree_path.is_relative_to(workspace_root)
+    assert plan.updated_state.worktrees["../outside"].path == "outside"
+
+
+def test_plan_add_files_rejects_branch_with_empty_slug(tmp_path: Path) -> None:
+    config = load_config(write_config(tmp_path, VALID_CONFIG))
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid branch slug"):
+        plan_add_files(
+            config=config,
+            state=state,
+            workspace_root=tmp_path / "authentic",
+            branch="???",
         )

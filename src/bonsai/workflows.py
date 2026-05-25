@@ -75,7 +75,9 @@ def plan_add_files(
     snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     slot = allocate_slot(state.worktrees)
     slug = branch_slug(branch)
-    worktree_path = workspace_root / branch
+    if slug == "":
+        raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
+    worktree_path = workspace_root / slug
     snippets_dir = workspace_root / snippets_dir_name
     files: list[FileWrite] = [
         FileWrite(
@@ -90,7 +92,7 @@ def plan_add_files(
     updated_state = update_worktree(
         state,
         branch,
-        ManagedWorktree(path=branch, slug=slug, slot=slot),
+        ManagedWorktree(path=slug, slug=slug, slot=slot),
     )
     return AddFilesPlan(
         branch=branch,
