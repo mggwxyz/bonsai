@@ -12,6 +12,8 @@ from bonsai.git import (
     discover_default_branch,
     parse_default_branch,
     remote_branch_exists,
+    remove_worktree,
+    worktree_has_changes,
 )
 from bonsai.models import (
     BonsaiState,
@@ -27,7 +29,9 @@ from bonsai.state import load_state, save_state
 from bonsai.workflows import (
     command_summary,
     execute_add,
+    execute_checkout,
     execute_clone,
+    execute_remove,
     plan_add_files,
     plan_clone_workspace,
     write_files,
@@ -100,6 +104,51 @@ def test_remote_branch_exists_uses_checked_runner_behavior() -> None:
 
     with pytest.raises(BonsaiCommandError, match="network failure"):
         remote_branch_exists(FailingRunner(), Path("/tmp/repo"), "feature")
+
+
+def test_worktree_has_changes_uses_porcelain_status() -> None:
+    class DirtyRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            return CommandResult(returncode=0, stdout=" M src/app.py\n")
+
+    runner = DirtyRunner()
+
+    assert worktree_has_changes(runner, Path("/tmp/repo")) is True
+    assert runner.commands == [
+        CommandSpec(
+            argv=("git", "-C", "/tmp/repo", "status", "--porcelain"),
+            cwd=None,
+        )
+    ]
+
+
+def test_remove_worktree_passes_force_when_requested() -> None:
+    runner = RecordingRunner()
+
+    remove_worktree(runner, Path("/tmp/repo/main"), Path("/tmp/repo/feature"), force=True)
+
+    assert runner.commands == [
+        CommandSpec(
+            argv=(
+                "git",
+                "-C",
+                "/tmp/repo/main",
+                "worktree",
+                "remove",
+                "--force",
+                "/tmp/repo/feature",
+            )
+        )
+    ]
 
 
 def test_recording_runner_captures_commands_without_running_them() -> None:
@@ -824,3 +873,300 @@ def test_execute_add_runs_setup_after_install(tmp_path: Path) -> None:
         CommandSpec(argv=("yarn", "install"), cwd=workspace_root / "feature"),
         CommandSpec(argv=("python", "-c", "print(2)"), cwd=workspace_root / "feature"),
     ]
+
+
+def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path) -> None:
+    class CleanRemoveRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = CleanRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    snippets = workspace_root / "caddy.d"
+    snippets.mkdir()
+    (snippets / "feature-frontend.caddy").write_text("feature\n", encoding="utf-8")
+    (snippets / "other-frontend.caddy").write_text("other\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+                "other": ManagedWorktree(path="other", slug="other", slot=2),
+            },
+        ),
+    )
+
+    plan = execute_remove(runner, "feature", workspace_root)
+
+    assert plan.branch == "feature"
+    assert plan.worktree_path == branch_worktree
+    assert plan.removed_snippets == (snippets / "feature-frontend.caddy",)
+    assert not (snippets / "feature-frontend.caddy").exists()
+    assert (snippets / "other-frontend.caddy").exists()
+    assert set(load_state(workspace_root / ".bonsai" / "state.json").worktrees) == {"other"}
+    assert runner.commands == [
+        CommandSpec(argv=("git", "-C", str(branch_worktree), "status", "--porcelain")),
+        CommandSpec(
+            argv=(
+                "git",
+                "-C",
+                str(default_worktree),
+                "worktree",
+                "remove",
+                str(branch_worktree),
+            )
+        ),
+    ]
+
+
+def test_execute_remove_refuses_dirty_worktree_without_force(tmp_path: Path) -> None:
+    class DirtyRemoveRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            return CommandResult(returncode=0, stdout=" M README.md\n")
+
+    runner = DirtyRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="has uncommitted changes"):
+        execute_remove(runner, "feature", workspace_root)
+
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].slot == 1
+    assert all("remove" not in command.argv for command in runner.commands)
+
+
+def test_execute_remove_forces_dirty_worktree_when_requested(tmp_path: Path) -> None:
+    class DirtyForceRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout=" M README.md\n")
+            return CommandResult(returncode=0)
+
+    runner = DirtyForceRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    execute_remove(runner, "feature", workspace_root, force=True)
+
+    assert runner.commands[-1].argv == (
+        "git",
+        "-C",
+        str(default_worktree),
+        "worktree",
+        "remove",
+        "--force",
+        str(branch_worktree),
+    )
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees == {}
+
+
+def test_execute_remove_rejects_unknown_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Unknown worktree: missing"):
+        execute_remove(RecordingRunner(), "missing", workspace_root)
+
+
+def test_execute_remove_rejects_default_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Cannot remove the default worktree"):
+        execute_remove(RecordingRunner(), "main", workspace_root)
+
+
+def test_execute_remove_preserves_state_when_git_remove_fails(tmp_path: Path) -> None:
+    class FailingRemoveRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            raise BonsaiCommandError("git worktree remove failed")
+
+    runner = FailingRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    snippets = workspace_root / "caddy.d"
+    snippets.mkdir()
+    snippet = snippets / "feature-frontend.caddy"
+    snippet.write_text("feature\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    with pytest.raises(BonsaiCommandError, match="git worktree remove failed"):
+        execute_remove(runner, "feature", workspace_root)
+
+    assert snippet.exists()
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].slot == 1
+
+
+def test_execute_checkout_resolves_existing_managed_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    (workspace_root / "feature").mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = execute_checkout(RecordingRunner(), "feature", workspace_root)
+
+    assert plan.worktree_path == workspace_root / "feature"
+    assert plan.created is False
+
+
+def test_execute_checkout_adds_missing_branch_with_existing_add_workflow(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_checkout(runner, "feature", workspace_root)
+
+    assert plan.worktree_path == workspace_root / "feature"
+    assert plan.created is True
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].path == (
+        "feature"
+    )
+    assert runner.commands[2].argv == (
+        "git",
+        "-C",
+        str(default_worktree),
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        str(workspace_root / "feature"),
+        "origin/main",
+    )

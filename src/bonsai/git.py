@@ -46,6 +46,11 @@ def current_branch(runner: Runner, repo: Path) -> str:
     return result.stdout.strip()
 
 
+def worktree_has_changes(runner: Runner, repo: Path) -> bool:
+    result = runner.run(["git", "-C", str(repo), "status", "--porcelain"])
+    return bool(result.stdout.strip())
+
+
 def add_existing_worktree(runner: Runner, repo: Path, branch: str, target: Path) -> None:
     runner.run(["git", "-C", str(repo), "worktree", "add", str(target), branch])
 
@@ -70,3 +75,16 @@ def add_new_worktree(
             f"origin/{base_branch}",
         ]
     )
+
+
+def remove_worktree(
+    runner: Runner,
+    repo: Path,
+    target: Path,
+    force: bool = False,
+) -> None:
+    argv = ["git", "-C", str(repo), "worktree", "remove"]
+    if force:
+        argv.append("--force")
+    argv.append(str(target))
+    runner.run(argv)

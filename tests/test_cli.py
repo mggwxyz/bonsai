@@ -48,6 +48,7 @@ def test_help_lists_core_commands() -> None:
     assert result.exit_code == 0
     assert "clone" in result.stdout
     assert "add" in result.stdout
+    assert "remove" in result.stdout
     assert "checkout" in result.stdout
     assert "shell-init" in result.stdout
     assert "install-shell" in result.stdout
@@ -232,6 +233,53 @@ def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert "Add workflow ready" not in result.stdout
 
 
+def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    def fake_find_workspace_root(path: Path) -> Path:
+        calls.append(("find", path))
+        return workspace_root
+
+    def fake_execute_remove(runner, name: str, root: Path, force: bool = False):
+        calls.append(("remove", runner, name, root, force))
+        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", fake_find_workspace_root)
+    monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
+
+    with runner.isolated_filesystem():
+        current = Path.cwd()
+        result = runner.invoke(cli.app, ["remove", "feature"])
+
+    assert result.exit_code == 0
+    assert calls[0] == ("find", current)
+    assert calls[1][0] == "remove"
+    assert isinstance(calls[1][1], FakeRunner)
+    assert calls[1][2:] == ("feature", workspace_root, False)
+    assert "Removed worktree" in result.stdout
+
+
+def test_remove_force_passes_force(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_remove(_runner, name: str, root: Path, force: bool = False):
+        calls.append((name, root, force))
+        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+
+    monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
+
+    result = runner.invoke(cli.app, ["remove", "feature", "--force"])
+
+    assert result.exit_code == 0
+    assert calls == [("feature", tmp_path, True)]
+
+
 def test_checkout_path_resolves_worktree_by_branch(monkeypatch, tmp_path: Path) -> None:
     write_checkout_workspace(tmp_path)
     monkeypatch.chdir(tmp_path)
@@ -252,14 +300,35 @@ def test_checkout_path_resolves_worktree_by_path(monkeypatch, tmp_path: Path) ->
     assert Path(result.stdout.strip()).samefile(tmp_path / "ma-123-test")
 
 
-def test_checkout_path_reports_unknown_worktree(monkeypatch, tmp_path: Path) -> None:
-    write_checkout_workspace(tmp_path)
-    monkeypatch.chdir(tmp_path)
+def test_checkout_path_reports_checkout_errors(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_checkout(_runner, name: str, _root: Path):
+        raise BonsaiWorkspaceError(f"Unable to prepare worktree: {name}")
+
+    monkeypatch.setattr(cli, "execute_checkout", fake_execute_checkout, raising=False)
 
     result = runner.invoke(cli.app, ["checkout", "--path", "missing"])
 
     assert result.exit_code == 1
-    assert "Error: Unknown worktree: missing" in result.stdout
+    assert "Error: Unable to prepare worktree: missing" in result.stdout
+
+
+def test_checkout_path_adds_missing_branch(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_checkout(_runner, name: str, root: Path):
+        calls.append((name, root))
+        return SimpleNamespace(worktree_path=root / "feature", created=True)
+
+    monkeypatch.setattr(cli, "execute_checkout", fake_execute_checkout, raising=False)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "feature"])
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path / "feature")
+    assert calls == [("feature", tmp_path)]
 
 
 def test_shell_init_zsh_prints_checkout_wrapper() -> None:

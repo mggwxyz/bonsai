@@ -6,7 +6,7 @@ from rich.console import Console
 
 from bonsai import __version__
 from bonsai.config import load_config
-from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
+from bonsai.errors import BonsaiConfigError, BonsaiError
 from bonsai.git import current_branch
 from bonsai.onboarding import (
     ProjectDefaults,
@@ -15,8 +15,7 @@ from bonsai.onboarding import (
     write_starter_config,
 )
 from bonsai.process import SubprocessRunner
-from bonsai.state import load_state
-from bonsai.workflows import execute_add, execute_clone
+from bonsai.workflows import execute_add, execute_checkout, execute_clone, execute_remove
 from bonsai.workspace import find_workspace_root
 
 console = Console()
@@ -144,22 +143,6 @@ def _guided_config_initializer(
     console.print("Review and commit this file so teammates can use Bonsai too.")
 
 
-def _resolve_worktree_path(workspace_root: Path, name: str) -> Path:
-    state = load_state(workspace_root / ".bonsai" / "state.json")
-    if name in {state.default_branch, state.default_worktree}:
-        return workspace_root / state.default_worktree
-
-    worktree = state.worktrees.get(name)
-    if worktree is None:
-        for candidate in state.worktrees.values():
-            if name in {candidate.path, candidate.slug}:
-                worktree = candidate
-                break
-    if worktree is None:
-        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
-    return workspace_root / worktree.path
-
-
 @app.command()
 def clone(
     git_url: str,
@@ -221,6 +204,22 @@ def add(branch: str) -> None:
         _fail(exc)
 
 
+@app.command("remove")
+def remove_command(
+    name: str,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Remove a worktree with uncommitted changes."),
+    ] = False,
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
+        console.print(f"Removed worktree: {plan.worktree_path}")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command()
 def checkout(
     name: str,
@@ -231,12 +230,14 @@ def checkout(
 ) -> None:
     try:
         root_path = find_workspace_root(Path.cwd())
-        worktree_path = _resolve_worktree_path(root_path, name)
+        plan = execute_checkout(SubprocessRunner(), name, root_path)
         if path:
-            typer.echo(str(worktree_path))
+            typer.echo(str(plan.worktree_path))
             return
+        if plan.created:
+            console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print("Shell integration is required for checkout to change directories.")
-        console.print(f"Resolved worktree: {worktree_path}")
+        console.print(f"Resolved worktree: {plan.worktree_path}")
         console.print('Run: eval "$(bonsai shell-init zsh)"')
         raise typer.Exit(code=1)
     except BonsaiError as exc:

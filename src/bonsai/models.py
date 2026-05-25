@@ -140,3 +140,23 @@ class AddFilesPlan:
     files: tuple[FileWrite, ...]
     symlinks: tuple[FileSymlink, ...]
     updated_state: BonsaiState
+
+
+@dataclass(frozen=True)
+class ResolvedWorktree:
+    branch: str
+    worktree: ManagedWorktree
+
+
+@dataclass(frozen=True)
+class RemoveWorktreePlan:
+    branch: str
+    worktree_path: Path
+    removed_snippets: tuple[Path, ...]
+    updated_state: BonsaiState
+
+
+@dataclass(frozen=True)
+class CheckoutWorktreePlan:
+    worktree_path: Path
+    created: bool

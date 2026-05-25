@@ -15,22 +15,29 @@ from bonsai.git import (
     fetch_origin,
     is_git_worktree,
     remote_branch_exists,
+    worktree_has_changes,
+)
+from bonsai.git import (
+    remove_worktree as git_remove_worktree,
 )
 from bonsai.models import (
     AddFilesPlan,
     BonsaiConfig,
     BonsaiState,
+    CheckoutWorktreePlan,
     CloneWorkspacePlan,
     CommandSpec,
     FileSymlink,
     FileWrite,
     ManagedWorktree,
+    RemoveWorktreePlan,
+    ResolvedWorktree,
 )
 from bonsai.ports import allocate_slot
 from bonsai.process import Runner
 from bonsai.rendering import render_caddy_snippets, render_env_local, render_root_caddyfile
 from bonsai.slug import branch_slug
-from bonsai.state import load_state, save_state, update_worktree
+from bonsai.state import load_state, remove_worktree, save_state, update_worktree
 
 ConfigInitializer = Callable[[Path, str, str, Path], None]
 
@@ -139,6 +146,33 @@ def plan_add_files(
     )
 
 
+def resolve_managed_worktree(state: BonsaiState, name: str) -> ResolvedWorktree | None:
+    worktree = state.worktrees.get(name)
+    if worktree is not None:
+        return ResolvedWorktree(branch=name, worktree=worktree)
+    for branch, candidate in state.worktrees.items():
+        if name in {candidate.path, candidate.slug}:
+            return ResolvedWorktree(branch=branch, worktree=candidate)
+    return None
+
+
+def _remove_generated_snippets(
+    workspace_root: Path,
+    config: BonsaiConfig,
+    slug: str,
+) -> tuple[Path, ...]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    snippets_dir = workspace_root / snippets_dir_name
+    removed: list[Path] = []
+    if not snippets_dir.exists():
+        return ()
+    for path in sorted(snippets_dir.glob(f"{slug}-*.caddy")):
+        if path.is_file() or path.is_symlink():
+            path.unlink()
+            removed.append(path)
+    return tuple(removed)
+
+
 def write_files(files: tuple[FileWrite, ...]) -> None:
     for file in files:
         file.path.parent.mkdir(parents=True, exist_ok=True)
@@ -235,3 +269,61 @@ def execute_add(
     if config.commands.setup:
         runner.run(shlex.split(config.commands.setup), cwd=plan.worktree_path)
     return plan
+
+
+def execute_checkout(
+    runner: Runner,
+    name: str,
+    workspace_root: Path,
+) -> CheckoutWorktreePlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    if name in {state.default_branch, state.default_worktree}:
+        return CheckoutWorktreePlan(
+            worktree_path=workspace_root / state.default_worktree,
+            created=False,
+        )
+
+    resolved = resolve_managed_worktree(state, name)
+    if resolved is not None:
+        return CheckoutWorktreePlan(
+            worktree_path=workspace_root / resolved.worktree.path,
+            created=False,
+        )
+
+    add_plan = execute_add(runner, name, workspace_root)
+    return CheckoutWorktreePlan(worktree_path=add_plan.worktree_path, created=True)
+
+
+def execute_remove(
+    runner: Runner,
+    name: str,
+    workspace_root: Path,
+    force: bool = False,
+) -> RemoveWorktreePlan:
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    if name in {state.default_branch, state.default_worktree}:
+        raise BonsaiWorkspaceError("Cannot remove the default worktree")
+
+    resolved = resolve_managed_worktree(state, name)
+    if resolved is None:
+        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
+
+    worktree_path = workspace_root / resolved.worktree.path
+    default_worktree = workspace_root / state.default_worktree
+    config = load_config(default_worktree / ".bonsai.toml")
+    if not force and worktree_has_changes(runner, worktree_path):
+        raise BonsaiWorkspaceError(
+            f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
+        )
+
+    git_remove_worktree(runner, default_worktree, worktree_path, force=force)
+    removed_snippets = _remove_generated_snippets(workspace_root, config, resolved.worktree.slug)
+    updated_state = remove_worktree(state, resolved.branch)
+    save_state(state_path, updated_state)
+    return RemoveWorktreePlan(
+        branch=resolved.branch,
+        worktree_path=worktree_path,
+        removed_snippets=removed_snippets,
+        updated_state=updated_state,
+    )

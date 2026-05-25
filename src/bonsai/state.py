@@ -42,3 +42,9 @@ def update_worktree(
     worktrees = dict(state.worktrees)
     worktrees[branch] = worktree
     return replace(state, worktrees=worktrees)
+
+
+def remove_worktree(state: BonsaiState, branch: str) -> BonsaiState:
+    worktrees = dict(state.worktrees)
+    worktrees.pop(branch, None)
+    return replace(state, worktrees=worktrees)

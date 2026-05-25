@@ -4,7 +4,7 @@ import pytest
 
 from bonsai.errors import BonsaiWorkspaceError
 from bonsai.models import BonsaiState, ManagedWorktree
-from bonsai.state import load_state, save_state, update_worktree
+from bonsai.state import load_state, remove_worktree, save_state, update_worktree
 from bonsai.workspace import find_workspace_root, workspace_paths
 
 
@@ -44,6 +44,25 @@ def test_update_worktree_replaces_one_branch() -> None:
 
     assert updated.worktrees["MB-2-test"].slot == 2
     assert state.worktrees == {}
+
+
+def test_remove_worktree_removes_one_branch_without_mutating_original() -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+            "other": ManagedWorktree(path="other", slug="other", slot=2),
+        },
+    )
+
+    updated = remove_worktree(state, "feature")
+
+    assert set(updated.worktrees) == {"other"}
+    assert set(state.worktrees) == {"feature", "other"}
 
 
 def test_find_workspace_root_walks_up_to_bonsai_state(tmp_path: Path) -> None:

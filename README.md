@@ -72,6 +72,7 @@ bonsai clone git@github.com:org/my-app.git my-app
 bonsai init
 bonsai add ma-123-implement-auth
 bonsai checkout ma-123-implement-auth
+bonsai remove ma-123-implement-auth
 bonsai list
 bonsai sync
 bonsai cleanup
@@ -103,3 +104,11 @@ bonsai install-shell zsh
 After opening a new shell, `bonsai checkout ma-123-implement-auth` changes into
 the matching worktree. The lookup accepts the branch name or the worktree
 directory name.
+
+If `bonsai checkout <branch>` does not find a managed worktree, Bonsai prepares
+one first. It fetches `origin`, uses the remote branch when it exists, or creates
+a new branch from the configured base branch before changing directories through
+the shell integration.
+
+`bonsai remove <worktree>` removes a managed worktree and its directory. Bonsai
+refuses to remove a worktree with uncommitted changes unless you pass `--force`.
