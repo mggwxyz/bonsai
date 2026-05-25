@@ -34,6 +34,7 @@ from bonsai.models import (
     OpenUrlPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
+    ServiceConfig,
     SyncFileAction,
     SyncPlan,
     WorktreeTarget,
@@ -300,14 +301,68 @@ def _stale_generated_snippet_actions(
     snippets_dir = workspace_root / snippets_dir_name
     if not snippets_dir.exists():
         return ()
-    service_suffixes = tuple(f"-{service.name}.caddy" for service in config.public_services())
+    services = config.public_services()
     actions: list[SyncFileAction] = []
     for path in sorted(snippets_dir.glob("*.caddy")):
+        if not path.is_file():
+            continue
         if path in desired_paths:
             continue
-        if any(path.name.endswith(suffix) for suffix in service_suffixes):
+        candidate = _stale_generated_snippet_candidate(path, services)
+        if candidate is None:
+            continue
+        slug, service = candidate
+        if _is_rendered_caddy_snippet(config, workspace_root, slug, service, path):
             actions.append(SyncFileAction(kind="remove", path=path))
     return tuple(actions)
+
+
+def _stale_generated_snippet_candidate(
+    path: Path,
+    services: tuple[ServiceConfig, ...],
+) -> tuple[str, ServiceConfig] | None:
+    for service in sorted(services, key=lambda service: len(service.name), reverse=True):
+        service_name = _safe_path_segment(service.name, "service name")
+        suffix = f"-{service_name}.caddy"
+        if not path.name.endswith(suffix):
+            continue
+        slug = path.name[: -len(suffix)]
+        if slug:
+            return slug, service
+    return None
+
+
+def _is_rendered_caddy_snippet(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    slug: str,
+    service: ServiceConfig,
+    path: Path,
+) -> bool:
+    try:
+        content = path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    slot = _rendered_snippet_slot(content, service)
+    if slot is None:
+        return False
+    rendered = render_caddy_snippets(config, slug, slot, workspace_root / slug)
+    return rendered.get(service.name) == content
+
+
+def _rendered_snippet_slot(content: str, service: ServiceConfig) -> int | None:
+    prefix = "\treverse_proxy localhost:"
+    for line in content.splitlines():
+        if not line.startswith(prefix):
+            continue
+        port_text = line.removeprefix(prefix)
+        if not port_text.isdecimal():
+            return None
+        slot = int(port_text) - service.base_port
+        if slot < 0:
+            return None
+        return slot
+    return None
 
 
 def plan_sync(workspace_root: Path) -> SyncPlan:
