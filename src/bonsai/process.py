@@ -20,6 +20,14 @@ class Runner(Protocol):
     ) -> CommandResult:
         ...
 
+    def run_stream(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> int:
+        ...
+
 
 class SubprocessRunner:
     def run(
@@ -53,6 +61,24 @@ class SubprocessRunner:
             )
         return result
 
+    def run_stream(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> int:
+        process_env = None
+        if env is not None:
+            process_env = os.environ.copy()
+            process_env.update(env)
+        completed = subprocess.run(
+            argv,
+            cwd=cwd,
+            env=process_env,
+            check=False,
+        )
+        return completed.returncode
+
 
 class RecordingRunner:
     def __init__(self) -> None:
@@ -68,3 +94,13 @@ class RecordingRunner:
         recorded_env = tuple(sorted(env.items())) if env is not None else ()
         self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
         return CommandResult(returncode=0)
+
+    def run_stream(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+    ) -> int:
+        recorded_env = tuple(sorted(env.items())) if env is not None else ()
+        self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+        return 0

@@ -161,6 +161,25 @@ def test_recording_runner_captures_commands_without_running_them() -> None:
     assert runner.commands == [CommandSpec(argv=("git", "status"), cwd=Path("/tmp/repo"))]
 
 
+def test_recording_runner_captures_stream_commands() -> None:
+    runner = RecordingRunner()
+
+    result = runner.run_stream(
+        ["yarn", "dev"],
+        cwd=Path("/tmp/worktree"),
+        env={"FRONTEND_PORT": "4201"},
+    )
+
+    assert result == 0
+    assert runner.commands == [
+        CommandSpec(
+            argv=("yarn", "dev"),
+            cwd=Path("/tmp/worktree"),
+            env=(("FRONTEND_PORT", "4201"),),
+        )
+    ]
+
+
 def test_caddy_setup_plan_installs_and_starts_when_missing() -> None:
     plan = caddy_setup_plan(
         auto_install=True,
