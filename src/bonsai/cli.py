@@ -32,6 +32,7 @@ from bonsai.workflows import (
     execute_checkout,
     execute_cleanup,
     execute_clone,
+    execute_init,
     execute_remove,
     execute_repair,
     execute_start,
@@ -270,6 +271,7 @@ def init_command(
         repo_path = current_path
         fallback_name = current_path.name
         config_path = current_path / ".bonsai.toml"
+        managed_workspace = False
         try:
             workspace_root = find_workspace_root(current_path)
         except BonsaiWorkspaceError:
@@ -277,11 +279,17 @@ def init_command(
         else:
             state_path = workspace_root / ".bonsai" / "state.json"
             if state_path.exists():
+                managed_workspace = True
                 state = load_state(state_path)
                 config_path = workspace_config_path(workspace_root)
                 fallback_name = workspace_root.name
                 if current_path == workspace_root:
                     repo_path = workspace_root / state.default_worktree
+        if not force and not managed_workspace and config_path.exists():
+            plan = execute_init(SubprocessRunner(), current_path)
+            console.print(f"Initialized workspace: {plan.workspace_root}")
+            console.print(f"Default worktree: {plan.default_worktree}")
+            return
         branch = current_branch(SubprocessRunner(), repo_path)
         path = write_guided_config(
             config_path=config_path,

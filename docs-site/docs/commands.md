@@ -34,6 +34,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `list`: List managed worktrees in the current...
 * `status`
 * `start`: Run the configured start command in a...
+* `logs`
 * `sync`: Compare or repair generated Bonsai files.
 * `repair`
 * `cleanup`: Remove branch worktrees whose pull...
@@ -257,6 +258,23 @@ $ bonsai start [OPTIONS] [BRANCH]
 
 **Options**:
 
+* `--help`: Show this message and exit.
+
+## `bonsai logs`
+
+**Usage**:
+
+```console
+$ bonsai logs [OPTIONS] [BRANCH]
+```
+
+**Arguments**:
+
+* `[BRANCH]`
+
+**Options**:
+
+* `--command TEXT`: Filter logs by command: install, setup, or start.
 * `--help`: Show this message and exit.
 
 ## `bonsai sync`

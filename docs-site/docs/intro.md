@@ -16,6 +16,9 @@ Use Bonsai when you often need to switch between feature branches, test several 
 - Managed worktrees for feature branches.
 - Generated `.env.local` values for branch-specific ports and names.
 - Optional Caddy snippets for local HTTPS URLs.
+- Configured install, setup, and start commands with managed lifecycle logs.
+- Rich and JSON workspace summaries for humans, scripts, and AI agents.
+- State repair, generated-file sync, workspace diagnostics, PR-aware cleanup, and Compose teardown during removal.
 
 ## Core Workflow
 
@@ -24,6 +27,8 @@ bonsai clone git@github.com:org/my-app.git my-app
 bonsai add ma-123-implement-auth
 bonsai checkout ma-123-implement-auth
 bonsai start
+bonsai logs --command start
+bonsai status
 bonsai open
 ```
 

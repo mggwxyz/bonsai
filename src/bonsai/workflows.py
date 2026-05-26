@@ -20,6 +20,7 @@ from bonsai.git import (
     fetch_origin,
     is_git_worktree,
     remote_branch_exists,
+    remote_origin_url,
     worktree_has_changes,
 )
 from bonsai.git import (
@@ -1183,6 +1184,60 @@ def execute_clone(
             cwd=plan.default_worktree,
             env=command_env,
         )
+    return plan
+
+
+def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
+    config_path = checkout_path / ".bonsai.toml"
+    config = load_config(config_path)
+    workspace_root = checkout_path.parent
+    state_path = workspace_root / ".bonsai" / "state.json"
+    if state_path.exists():
+        raise BonsaiWorkspaceError(f"Bonsai workspace already initialized: {workspace_root}")
+
+    default_worktree = _safe_path_segment(checkout_path.name, "default worktree")
+    default_branch = current_branch(runner, checkout_path)
+    if not default_branch or default_branch == "HEAD":
+        raise BonsaiWorkspaceError(f"Unable to determine current branch for {checkout_path}")
+    if default_worktree != default_branch:
+        raise BonsaiWorkspaceError(
+            "Existing checkout directory must match the current branch for bonsai init: "
+            f"{checkout_path.name!r} != {default_branch!r}. "
+            "Use the Bonsai layout <workspace>/<branch>."
+        )
+
+    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    snippets_dir = workspace_root / snippets_dir_name
+    state = BonsaiState(
+        version=1,
+        name=workspace_root.name,
+        default_branch=default_branch,
+        default_worktree=default_worktree,
+        repo_url=remote_origin_url(runner, checkout_path),
+        worktrees={},
+    )
+    files = (
+        FileWrite(
+            path=workspace_root / root_caddyfile,
+            content=render_root_caddyfile(snippets_dir),
+        ),
+        *generated_worktree_files(
+            config,
+            branch=default_branch,
+            slot=0,
+            workspace_root=workspace_root,
+            worktree_path=checkout_path,
+        ),
+    )
+    plan = CloneWorkspacePlan(
+        workspace_root=workspace_root,
+        default_worktree=checkout_path,
+        state=state,
+        files=files,
+    )
+    write_files(plan.files)
+    save_state(state_path, state)
     return plan
 
 

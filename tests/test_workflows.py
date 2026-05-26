@@ -35,6 +35,7 @@ from bonsai.workflows import (
     execute_checkout,
     execute_cleanup,
     execute_clone,
+    execute_init,
     execute_remove,
     execute_repair,
     execute_start,
@@ -1878,6 +1879,77 @@ def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Pa
 
     assert plan.workspace_root == tmp_path / "authentic"
     assert (tmp_path / "authentic" / "Caddyfile").exists()
+
+
+def test_execute_init_adopts_existing_checkout_config(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+
+    class ExistingCheckoutRunner:
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            _ = (cwd, check, env)
+            if argv[-2:] == ["--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="main\n")
+            if argv[-3:] == ["config", "--get", "remote.origin.url"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="git@github.com:org/authentic.git\n",
+                )
+            raise AssertionError(f"unexpected command: {argv}")
+
+    plan = execute_init(ExistingCheckoutRunner(), default_worktree)
+
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.name == "authentic"
+    assert state.default_branch == "main"
+    assert state.default_worktree == "main"
+    assert state.repo_url == "git@github.com:org/authentic.git"
+    assert state.worktrees == {}
+    assert plan.workspace_root == workspace_root
+    assert plan.default_worktree == default_worktree
+    assert (default_worktree / ".bonsai.toml").read_text(encoding="utf-8") == VALID_CONFIG
+    assert (default_worktree / ".env.local").exists()
+    assert (workspace_root / "Caddyfile").exists()
+
+
+def test_execute_init_rejects_checkout_directory_that_does_not_match_branch(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    checkout = workspace_root / "app"
+    checkout.mkdir(parents=True)
+    write_config(checkout, VALID_CONFIG)
+
+    class ExistingCheckoutRunner:
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            _ = (cwd, check, env)
+            if argv[-2:] == ["--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="main\n")
+            if argv[-3:] == ["config", "--get", "remote.origin.url"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="git@github.com:org/authentic.git\n",
+                )
+            raise AssertionError(f"unexpected command: {argv}")
+
+    with pytest.raises(BonsaiWorkspaceError, match="checkout directory must match"):
+        execute_init(ExistingCheckoutRunner(), checkout)
+
+    assert not (workspace_root / ".bonsai" / "state.json").exists()
 
 
 def test_execute_add_uses_slug_path_when_adding_git_worktree(tmp_path: Path) -> None:

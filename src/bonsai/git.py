@@ -46,6 +46,16 @@ def current_branch(runner: Runner, repo: Path) -> str:
     return result.stdout.strip()
 
 
+def remote_origin_url(runner: Runner, repo: Path) -> str:
+    result = runner.run(
+        ["git", "-C", str(repo), "config", "--get", "remote.origin.url"],
+        check=False,
+    )
+    if result.returncode != 0:
+        return ""
+    return result.stdout.strip()
+
+
 def worktree_has_changes(runner: Runner, repo: Path) -> bool:
     result = runner.run(["git", "-C", str(repo), "status", "--porcelain"])
     return bool(result.stdout.strip())

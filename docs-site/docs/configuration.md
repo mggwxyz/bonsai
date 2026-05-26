@@ -43,7 +43,11 @@ url = "https://${slug}.my-app.localhost"
 
 Bonsai expands branch-specific values into generated files. The most common template value is `${slug}`, which is derived from the branch name and safe to use in ports, URLs, and environment names.
 
-Configured `install`, `setup`, and `start` commands run from the target worktree with Bonsai's generated environment values available in the subprocess environment.
+Configured `install`, `setup`, and `start` commands run from the target worktree with Bonsai's generated environment values available in the subprocess environment. `install` and `setup` run while Bonsai prepares clone and branch worktrees. `start` runs through `bonsai start [branch]` or `bonsai add <branch> --start`.
+
+Bonsai streams lifecycle command output live and stores timestamped logs under `.bonsai/logs/<worktree-slug>/`. Use `bonsai logs [branch] --command install`, `setup`, or `start` to read the latest log for a command kind.
+
+If a worktree uses Docker Compose, set `COMPOSE_PROJECT_NAME` through `[[env]]` so `bonsai remove` and applied `bonsai cleanup` can run `docker compose -p <project> down` for the correct branch-specific project.
 
 ## Repairing Generated Files
 

@@ -18,4 +18,9 @@ npm start
 npm run build
 ```
 
-The production build is written to `build/`.
+`npm run build` runs `generate:cli` first, then builds the static site. The
+production build is written to `build/`.
+
+## Deploy
+
+GitHub Pages deployment is handled by the repository's `Docs` workflow.
