@@ -11,6 +11,7 @@ from bonsai.errors import BonsaiCommandError, BonsaiConfigError, BonsaiWorkspace
 from bonsai.git import (
     clone_default_branch,
     discover_default_branch,
+    move_worktree,
     parse_default_branch,
     remote_branch_exists,
     remove_worktree,
@@ -164,6 +165,31 @@ def test_remove_worktree_passes_force_when_requested() -> None:
                 "remove",
                 "--force",
                 "/tmp/repo/feature",
+            )
+        )
+    ]
+
+
+def test_move_worktree_uses_git_worktree_move() -> None:
+    runner = RecordingRunner()
+
+    move_worktree(
+        runner,
+        Path("/tmp/repo/main"),
+        Path("/tmp/repo/mb-123-auth"),
+        Path("/tmp/repo/MB-123-auth"),
+    )
+
+    assert runner.commands == [
+        CommandSpec(
+            argv=(
+                "git",
+                "-C",
+                "/tmp/repo/main",
+                "worktree",
+                "move",
+                "/tmp/repo/mb-123-auth",
+                "/tmp/repo/MB-123-auth",
             )
         )
     ]

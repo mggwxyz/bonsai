@@ -127,3 +127,22 @@ def remove_worktree(
         argv.append("--force")
     argv.append(str(target))
     runner.run(argv)
+
+
+def move_worktree(
+    runner: Runner,
+    repo: Path,
+    source: Path,
+    target: Path,
+) -> None:
+    runner.run(
+        [
+            "git",
+            "-C",
+            str(repo),
+            "worktree",
+            "move",
+            str(source),
+            str(target),
+        ]
+    )
