@@ -209,6 +209,23 @@ class CleanupPlan:
 
 
 @dataclass(frozen=True)
+class RepairItem:
+    branch: str
+    worktree_path: Path
+    action: str
+    reason: str
+    old_slot: int | None = None
+    new_slot: int | None = None
+
+
+@dataclass(frozen=True)
+class RepairPlan:
+    items: tuple[RepairItem, ...]
+    updated_state: BonsaiState
+    state_changed: bool
+
+
+@dataclass(frozen=True)
 class CheckoutWorktreePlan:
     worktree_path: Path
     created: bool
