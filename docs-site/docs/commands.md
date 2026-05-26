@@ -26,6 +26,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `init`: Create a starter .bonsai.toml for the...
 * `add`: Prepare a managed worktree for a branch.
 * `remove`: Remove a managed worktree.
+* `move`: Move a managed worktree folder.
 * `checkout`: Resolve or prepare a worktree for shell...
 * `open`: Open the current worktree&#x27;s primary local...
 * `context`: Print Bonsai facts for the current worktree.
@@ -129,6 +130,29 @@ $ bonsai remove [OPTIONS] NAME
 
 * `--force`: Remove a worktree with uncommitted changes.
 * `--help`: Show this message and exit.
+
+## `bonsai move`
+
+Move a managed worktree folder.
+
+**Usage**:
+
+```console
+$ bonsai move [OPTIONS] NAME NEW_FOLDER
+```
+
+**Arguments**:
+
+* `NAME`: [required]
+* `NEW_FOLDER`: [required]
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+The worktree argument accepts a branch name, worktree directory, or worktree
+slug. Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and
+refreshes generated files. The default worktree cannot be moved.
 
 ## `bonsai checkout`
 
@@ -334,4 +358,3 @@ $ bonsai doctor [OPTIONS]
 **Options**:
 
 * `--help`: Show this message and exit.
-

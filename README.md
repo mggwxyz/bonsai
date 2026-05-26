@@ -204,6 +204,12 @@ If the worktree has a root-level `compose.yaml`, `compose.yml`,
 when present and the worktree folder name otherwise. If Compose teardown fails,
 removal stops before the git worktree is removed.
 
+`bonsai move <worktree> <new-folder>` renames a managed worktree directory.
+The lookup accepts a branch name, worktree directory, or worktree slug. Bonsai
+uses `git worktree move` underneath, updates `.bonsai/state.json`, and rewrites
+generated files so path-dependent template values stay current. The default
+worktree cannot be moved.
+
 `bonsai cleanup` is PR-aware cleanup for managed branch worktrees. It requires
 the GitHub CLI (`gh`) to be installed and authenticated, checks each managed
 branch for a merged pull request, and is a dry run by default. Use
