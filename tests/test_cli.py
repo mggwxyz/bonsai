@@ -62,6 +62,7 @@ def test_help_lists_core_commands() -> None:
     assert "agent-guide" in result.stdout
     assert "context" in result.stdout
     assert "status" in result.stdout
+    assert "repair" in result.stdout
 
 
 def test_agent_guide_prints_package_level_agent_rules() -> None:

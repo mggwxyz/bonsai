@@ -105,6 +105,7 @@ bonsai agent-guide
 bonsai list
 bonsai status
 bonsai sync
+bonsai repair
 bonsai cleanup
 bonsai doctor
 ```
@@ -192,6 +193,11 @@ contract.
 current config and state. It is a dry run by default. Use `bonsai sync --apply`
 to write missing or stale generated files, remove stale Bonsai Caddy snippets,
 and reload Caddy when local routing changed.
+
+`bonsai repair` fixes structural state drift. It removes missing managed
+worktree entries from `.bonsai/state.json` and repacks surviving managed slots in
+a dry run by default. Use `bonsai repair --apply` to write state, then run
+`bonsai sync --apply` to refresh generated `.env.local` and Caddy files.
 
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
 Caddy files, Caddy availability, and configured service port conflicts. Failed
