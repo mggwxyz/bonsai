@@ -171,6 +171,7 @@ def clone(
         ),
     ] = True,
 ) -> None:
+    """Clone a repository into a new Bonsai workspace."""
     try:
         config_initializer = _guided_config_initializer if interactive else None
         plan = execute_clone(
@@ -193,6 +194,7 @@ def agent_guide(
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
 ) -> None:
+    """Print package-level guidance for AI agents and automation."""
     try:
         typer.echo(render_agent_guide(output_format), nl=False)
     except BonsaiError as exc:
@@ -206,6 +208,7 @@ def init_command(
         typer.Option("--force", help="Overwrite an existing .bonsai.toml."),
     ] = False,
 ) -> None:
+    """Create a starter .bonsai.toml for the current checkout or workspace."""
     try:
         current_path = Path.cwd()
         repo_path = current_path
@@ -239,6 +242,7 @@ def init_command(
 
 @app.command()
 def add(branch: str) -> None:
+    """Prepare a managed worktree for a branch."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_add(SubprocessRunner(), branch, root_path)
@@ -256,6 +260,7 @@ def remove_command(
         typer.Option("--force", help="Remove a worktree with uncommitted changes."),
     ] = False,
 ) -> None:
+    """Remove a managed worktree."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
@@ -272,6 +277,7 @@ def checkout(
         typer.Option("--path", help="Print the resolved worktree path for shell integration."),
     ] = False,
 ) -> None:
+    """Resolve or prepare a worktree for shell checkout."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_checkout(SubprocessRunner(), name, root_path)
@@ -290,6 +296,7 @@ def checkout(
 
 @app.command("open")
 def open_command() -> None:
+    """Open the current worktree's primary local URL."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = plan_open_url(root_path, Path.cwd())
@@ -307,6 +314,7 @@ def context_command(
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
 ) -> None:
+    """Print Bonsai facts for the current worktree."""
     try:
         root_path = find_workspace_root(Path.cwd())
         context = plan_agent_context(root_path, Path.cwd())
@@ -317,6 +325,7 @@ def context_command(
 
 @app.command("shell-init")
 def shell_init(shell: str) -> None:
+    """Print shell integration code."""
     try:
         if shell != "zsh":
             raise BonsaiConfigError(f"Unsupported shell: {shell}")
@@ -327,6 +336,7 @@ def shell_init(shell: str) -> None:
 
 @app.command("install-shell")
 def install_shell(shell: str) -> None:
+    """Install shell integration for Bonsai checkout."""
     try:
         if shell != "zsh":
             raise BonsaiConfigError(f"Unsupported shell: {shell}")
@@ -352,6 +362,7 @@ def install_shell(shell: str) -> None:
 
 @app.command("list")
 def list_worktrees() -> None:
+    """List managed worktrees in the current workspace."""
     try:
         root_path = find_workspace_root(Path.cwd())
         state = load_state(root_path / ".bonsai" / "state.json")
@@ -370,6 +381,7 @@ def list_worktrees() -> None:
 
 @app.command()
 def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
+    """Run the configured start command in a worktree."""
     try:
         root_path = find_workspace_root(Path.cwd())
         label = branch or "current worktree"
@@ -382,6 +394,7 @@ def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
 
 @app.command()
 def sync(apply: bool = typer.Option(False, "--apply", help="Write regenerated files.")) -> None:
+    """Compare or repair generated Bonsai files."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_sync(SubprocessRunner(), root_path, apply=apply)
@@ -408,6 +421,7 @@ def cleanup(
         help="Remove eligible worktrees with uncommitted changes.",
     ),
 ) -> None:
+    """Remove branch worktrees whose pull requests were merged."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_cleanup(SubprocessRunner(), root_path, apply=apply, force=force)
@@ -426,6 +440,7 @@ def cleanup(
 
 @app.command()
 def doctor() -> None:
+    """Check workspace health and report repair hints."""
     try:
         root_path = find_workspace_root(Path.cwd())
         report = check_workspace_health(SubprocessRunner(), root_path)

@@ -10,6 +10,21 @@ uv run bonsai --help
 uv run bonsai --version
 ```
 
+## Documentation Site
+
+The Docusaurus docs site lives in `docs-site/`.
+
+```bash
+cd docs-site
+npm install
+npm run generate:cli
+npm start
+```
+
+`npm run build` regenerates the CLI command reference from the Typer app before
+building the static site. GitHub Pages deployment is handled by the `Docs`
+workflow.
+
 ## Release
 
 Run the release script from a clean `main` checkout:

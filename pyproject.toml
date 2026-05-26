@@ -39,6 +39,7 @@ exclude = [
   "/.git",
   "/.worktrees",
   "/docs",
+  "/docs-site",
 ]
 
 [tool.pytest.ini_options]

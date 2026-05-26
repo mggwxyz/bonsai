@@ -1,0 +1,56 @@
+.hero {
+  padding: 5rem 0 4rem;
+  background: linear-gradient(180deg, #f8fbf9 0%, #eef5f2 100%);
+  border-bottom: 1px solid #d7e3dd;
+  color: #15231b;
+}
+
+.title {
+  font-size: clamp(3rem, 8vw, 5.75rem);
+  line-height: 0.95;
+  letter-spacing: 0;
+  margin-bottom: 1rem;
+}
+
+.subtitle {
+  max-width: 42rem;
+  font-size: 1.35rem;
+  line-height: 1.45;
+  margin-bottom: 2rem;
+}
+
+.buttons {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+.quickPanel {
+  padding: 3rem 0;
+}
+
+.commandBlock {
+  max-width: 48rem;
+  padding: 1.25rem;
+  border-radius: 8px;
+  background: #111816;
+  color: #e8f3ee;
+  overflow-x: auto;
+}
+
+[data-theme='dark'] .hero {
+  background: linear-gradient(180deg, #111816 0%, #15231b 100%);
+  border-bottom-color: #2f463b;
+  color: #f0f7f3;
+}
+
+@media screen and (max-width: 996px) {
+  .hero {
+    padding: 3rem 0;
+  }
+
+  .subtitle {
+    font-size: 1.1rem;
+  }
+}
