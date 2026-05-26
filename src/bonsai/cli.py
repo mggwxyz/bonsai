@@ -33,6 +33,7 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_init,
+    execute_move,
     execute_remove,
     execute_repair,
     execute_start,
@@ -368,6 +369,19 @@ def remove_command(
         if getattr(plan, "compose_project_name", None) is not None:
             console.print(f"compose down {plan.compose_project_name}")
         console.print(f"Removed worktree: {plan.worktree_path}")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("move")
+def move_command(name: str, new_folder: str) -> None:
+    """Move a managed worktree folder."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_move(SubprocessRunner(), name, new_folder, root_path)
+        console.print(
+            f"Moved worktree: {plan.old_worktree_path} -> {plan.new_worktree_path}"
+        )
     except BonsaiError as exc:
         _fail(exc)
 
