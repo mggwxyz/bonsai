@@ -43,6 +43,7 @@ from bonsai.workflows import (
     plan_open_url,
     plan_sync,
     resolve_start_target,
+    run_lifecycle_command,
     write_files,
 )
 
@@ -1185,6 +1186,36 @@ def test_caddy_reload_command_is_displayable() -> None:
     assert command_summary(command) == "caddy reload --config /tmp/authentic/Caddyfile"
 
 
+def test_lifecycle_command_failure_includes_log_path(tmp_path: Path) -> None:
+    class FailingRunner(RecordingRunner):
+        def run_stream_logged(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            env=None,
+            log_path: Path | None = None,
+            label: str | None = None,
+        ) -> int:
+            super().run_stream_logged(argv, cwd=cwd, env=env, log_path=log_path, label=label)
+            return 9
+
+    runner = FailingRunner()
+    workspace_root = tmp_path / "authentic"
+    worktree_path = workspace_root / "feature"
+
+    with pytest.raises(BonsaiCommandError, match=r"Log: .*install\.log"):
+        run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug="feature",
+            kind="install",
+            command="yarn install",
+            cwd=worktree_path,
+            env={"FRONTEND_PORT": "4201"},
+            check=True,
+        )
+
+
 def test_execute_clone_rejects_unsafe_name_before_git_commands(tmp_path: Path) -> None:
     class CloneRunner:
         def __init__(self) -> None:
@@ -1208,7 +1239,7 @@ def test_execute_clone_rejects_unsafe_name_before_git_commands(tmp_path: Path) -
 
 
 def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) -> None:
-    class MissingConfigCloneRunner:
+    class MissingConfigCloneRunner(RecordingRunner):
         def __init__(self) -> None:
             self.commands: list[CommandSpec] = []
 
@@ -1266,10 +1297,7 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
 def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
     tmp_path: Path,
 ) -> None:
-    class MissingConfigCloneRunner:
-        def __init__(self) -> None:
-            self.commands: list[CommandSpec] = []
-
+    class MissingConfigCloneRunner(RecordingRunner):
         def run(
             self,
             argv: list[str],
@@ -1310,8 +1338,14 @@ def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
     setup_command = runner.commands[-1]
     assert install_command.argv == ("yarn", "install")
     assert install_command.cwd == default_worktree
+    assert install_command.log_path is not None
+    assert install_command.log_path.parent == tmp_path / "authentic" / ".bonsai" / "logs" / "main"
+    assert install_command.log_path.name.endswith("-install.log")
     assert setup_command.argv == ("yarn", "setup")
     assert setup_command.cwd == default_worktree
+    assert setup_command.log_path is not None
+    assert setup_command.log_path.parent == tmp_path / "authentic" / ".bonsai" / "logs" / "main"
+    assert setup_command.log_path.name.endswith("-setup.log")
     setup_env = dict(setup_command.env)
     assert setup_env["COMPOSE_PROJECT_NAME"] == "authentic-main"
     assert setup_env["FRONTEND_PORT"] == "4200"
@@ -1320,7 +1354,7 @@ def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
 
 
 def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Path) -> None:
-    class RepoConfigCloneRunner:
+    class RepoConfigCloneRunner(RecordingRunner):
         def run(
             self,
             argv: list[str],
@@ -1445,7 +1479,7 @@ def test_execute_add_prefers_workspace_root_config_over_repo_config(tmp_path: Pa
 
 
 def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Path) -> None:
-    class ExistingWorktreeRunner:
+    class ExistingWorktreeRunner(RecordingRunner):
         def __init__(self) -> None:
             self.commands: list[CommandSpec] = []
 
@@ -1503,7 +1537,7 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
 def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
     tmp_path: Path,
 ) -> None:
-    class ExistingWorktreeRunner:
+    class ExistingWorktreeRunner(RecordingRunner):
         def __init__(self) -> None:
             self.commands: list[CommandSpec] = []
 
@@ -1787,6 +1821,42 @@ def test_execute_add_runs_setup_with_generated_worktree_env(tmp_path: Path) -> N
     assert setup_env["FRONTEND_PORT"] == "4201"
     assert setup_env["API_PORT"] == "3334"
     assert setup_env["DB_PORT"] == "5556"
+
+
+def test_execute_add_logs_install_and_setup_under_managed_worktree_slug(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature/auth", workspace_root)
+
+    logs_dir = workspace_root / ".bonsai" / "logs" / "feature-auth"
+    install_command = runner.commands[-2]
+    setup_command = runner.commands[-1]
+    assert install_command.argv == ("yarn", "install")
+    assert install_command.log_path is not None
+    assert install_command.log_path.parent == logs_dir
+    assert install_command.log_path.name.endswith("-install.log")
+    assert setup_command.argv == ("yarn", "setup")
+    assert setup_command.log_path is not None
+    assert setup_command.log_path.parent == logs_dir
+    assert setup_command.log_path.name.endswith("-setup.log")
 
 
 def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path) -> None:
@@ -2333,16 +2403,17 @@ def test_execute_start_runs_configured_command_with_generated_env(tmp_path: Path
     exit_code = execute_start(runner, workspace_root, "feature", feature_worktree)
 
     assert exit_code == 0
-    assert runner.commands == [
-        CommandSpec(
-            argv=("yarn", "dev"),
-            cwd=feature_worktree,
-            env=(
-                ("COMPOSE_PROJECT_NAME", "authentic-feature"),
-                ("FRONTEND_PORT", "4201"),
-            ),
-        )
-    ]
+    assert len(runner.commands) == 1
+    command = runner.commands[0]
+    assert command.argv == ("yarn", "dev")
+    assert command.cwd == feature_worktree
+    assert command.env == (
+        ("COMPOSE_PROJECT_NAME", "authentic-feature"),
+        ("FRONTEND_PORT", "4201"),
+    )
+    assert command.log_path is not None
+    assert command.log_path.parent == workspace_root / ".bonsai" / "logs" / "feature"
+    assert command.log_path.name.endswith("-start.log")
 
 
 def test_execute_start_fails_when_start_command_is_missing(tmp_path: Path) -> None:
