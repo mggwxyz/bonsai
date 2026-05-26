@@ -21,6 +21,7 @@ bonsai init
 
 This adopts the checkout as the default worktree, imports existing sibling git worktrees, writes Bonsai workspace state beside it, and renders generated files.
 The checkout directory must match the current branch, matching Bonsai's `my-app/main` workspace layout.
+If state already exists but is missing sibling worktrees, rerunning `bonsai init` reconciles state from the existing config.
 
 Create or prepare a branch worktree:
 

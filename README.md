@@ -141,7 +141,9 @@ directory matching the current branch), Bonsai adopts it as the default
 worktree, imports existing sibling git worktrees, writes workspace state beside
 it, and renders generated files.
 Otherwise it runs the guided `.bonsai.toml` setup. When run inside a managed
-Bonsai workspace, it writes the local root config.
+Bonsai workspace with an existing root or default-worktree config, it reconciles
+state and generated files; without an existing config, it writes the local root
+config.
 
 Configured `install` and `setup` commands run from the target worktree with
 Bonsai's generated `.env.local` values available in the subprocess environment.

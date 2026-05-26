@@ -375,6 +375,54 @@ def test_init_adopts_existing_config_without_overwriting(monkeypatch, tmp_path: 
     assert str(workspace_root) in result.stdout
 
 
+def test_init_reconciles_managed_workspace_with_repo_config(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={},
+        ),
+    )
+    monkeypatch.chdir(default_worktree)
+
+    class FakeRunner:
+        pass
+
+    def fake_execute_init(runner, checkout_path: Path):
+        calls.append((runner, checkout_path))
+        return SimpleNamespace(
+            workspace_root=workspace_root,
+            default_worktree=default_worktree,
+        )
+
+    def fail_write_guided_config(*_args, **_kwargs):
+        raise AssertionError("existing repo config should be reconciled, not prompted")
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "execute_init", fake_execute_init, raising=False)
+    monkeypatch.setattr(cli, "write_guided_config", fail_write_guided_config, raising=False)
+
+    result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert len(calls) == 1
+    assert isinstance(calls[0][0], FakeRunner)
+    assert calls[0][1] == default_worktree
+    assert "Initialized workspace" in result.stdout
+
+
 def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     workspace_root = tmp_path / "bonsai-authentic"
     calls = []

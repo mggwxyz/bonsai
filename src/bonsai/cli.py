@@ -43,6 +43,7 @@ from bonsai.workflows import (
     plan_open_url,
     plan_open_url_for_worktree,
     plan_workspace_summary,
+    repo_config_path,
     workspace_config_path,
 )
 from bonsai.workspace import find_workspace_root
@@ -283,8 +284,20 @@ def init_command(
                 state = load_state(state_path)
                 config_path = workspace_config_path(workspace_root)
                 fallback_name = workspace_root.name
+                default_worktree_path = workspace_root / state.default_worktree
+                if (
+                    not force
+                    and (
+                        config_path.exists()
+                        or repo_config_path(workspace_root, state.default_worktree).exists()
+                    )
+                ):
+                    plan = execute_init(SubprocessRunner(), default_worktree_path)
+                    console.print(f"Initialized workspace: {plan.workspace_root}")
+                    console.print(f"Default worktree: {plan.default_worktree}")
+                    return
                 if current_path == workspace_root:
-                    repo_path = workspace_root / state.default_worktree
+                    repo_path = default_worktree_path
         if not force and not managed_workspace and config_path.exists():
             plan = execute_init(SubprocessRunner(), current_path)
             console.print(f"Initialized workspace: {plan.workspace_root}")

@@ -1189,28 +1189,45 @@ def execute_clone(
 
 
 def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
-    config_path = checkout_path / ".bonsai.toml"
-    config = load_config(config_path)
     workspace_root = checkout_path.parent
     state_path = workspace_root / ".bonsai" / "state.json"
     if state_path.exists():
-        raise BonsaiWorkspaceError(f"Bonsai workspace already initialized: {workspace_root}")
-
-    default_worktree = _safe_path_segment(checkout_path.name, "default worktree")
-    default_branch = current_branch(runner, checkout_path)
-    if not default_branch or default_branch == "HEAD":
-        raise BonsaiWorkspaceError(f"Unable to determine current branch for {checkout_path}")
-    if default_worktree != default_branch:
-        raise BonsaiWorkspaceError(
-            "Existing checkout directory must match the current branch for bonsai init: "
-            f"{checkout_path.name!r} != {default_branch!r}. "
-            "Use the Bonsai layout <workspace>/<branch>."
+        base_state = load_state(state_path)
+        config = load_workspace_config(workspace_root, base_state)
+        default_worktree = _safe_path_segment(base_state.default_worktree, "default worktree")
+        default_branch = base_state.default_branch
+        expected_checkout_path = workspace_root / default_worktree
+        if checkout_path.resolve() != expected_checkout_path.resolve():
+            raise BonsaiWorkspaceError(
+                "Existing workspace state default worktree does not match bonsai init path: "
+                f"{default_worktree!r} != {checkout_path.name!r}"
+            )
+    else:
+        config_path = checkout_path / ".bonsai.toml"
+        config = load_config(config_path)
+        default_worktree = _safe_path_segment(checkout_path.name, "default worktree")
+        default_branch = current_branch(runner, checkout_path)
+        if not default_branch or default_branch == "HEAD":
+            raise BonsaiWorkspaceError(f"Unable to determine current branch for {checkout_path}")
+        if default_worktree != default_branch:
+            raise BonsaiWorkspaceError(
+                "Existing checkout directory must match the current branch for bonsai init: "
+                f"{checkout_path.name!r} != {default_branch!r}. "
+                "Use the Bonsai layout <workspace>/<branch>."
+            )
+        base_state = BonsaiState(
+            version=1,
+            name=workspace_root.name,
+            default_branch=default_branch,
+            default_worktree=default_worktree,
+            repo_url=remote_origin_url(runner, checkout_path),
+            worktrees={},
         )
 
     root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
     snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     snippets_dir = workspace_root / snippets_dir_name
-    adopted_worktrees: dict[str, ManagedWorktree] = {}
+    adopted_worktrees: dict[str, ManagedWorktree] = dict(base_state.worktrees)
     workspace_root_resolved = workspace_root.resolve()
     checkout_path_resolved = checkout_path.resolve()
     for git_worktree in list_worktrees(runner, checkout_path):
@@ -1220,6 +1237,10 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
             continue
         if worktree_path.parent != workspace_root_resolved:
             continue
+        if not worktree_path.is_dir():
+            continue
+        if branch in adopted_worktrees:
+            continue
         relative_path = _safe_path_segment(worktree_path.name, "worktree path")
         slug = branch_slug(branch)
         if slug == "":
@@ -1227,14 +1248,10 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
         adopted_worktrees[branch] = ManagedWorktree(
             path=relative_path,
             slug=slug,
-            slot=len(adopted_worktrees) + 1,
+            slot=allocate_slot(adopted_worktrees),
         )
-    state = BonsaiState(
-        version=1,
-        name=workspace_root.name,
-        default_branch=default_branch,
-        default_worktree=default_worktree,
-        repo_url=remote_origin_url(runner, checkout_path),
+    state = replace(
+        base_state,
         worktrees=adopted_worktrees,
     )
     files = [
