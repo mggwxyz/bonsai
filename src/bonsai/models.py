@@ -107,6 +107,7 @@ class CommandSpec:
     argv: tuple[str, ...]
     cwd: Path | None = None
     env: tuple[tuple[str, str], ...] = ()
+    log_path: Path | None = None
 
 
 @dataclass(frozen=True)

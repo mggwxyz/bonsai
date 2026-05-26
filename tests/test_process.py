@@ -5,7 +5,8 @@ from pathlib import Path
 from rich.console import Console
 from rich.text import Text
 
-from bonsai.process import SubprocessRunner, format_command
+from bonsai.models import CommandSpec
+from bonsai.process import RecordingRunner, SubprocessRunner, format_command
 
 
 class StatusContext:
@@ -117,3 +118,72 @@ def test_subprocess_runner_skips_status_for_non_terminal_console() -> None:
 
     assert result.stdout == "ok\n"
     assert stderr.getvalue() == ""
+
+
+def test_subprocess_runner_streams_stdout_and_stderr_to_log_and_stream(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    stderr = io.StringIO()
+    console = Console(file=stderr, force_terminal=False, color_system=None)
+    runner = SubprocessRunner(console=console, stream=stream)
+    log_path = tmp_path / "command.log"
+
+    exit_code = runner.run_stream_logged(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "import sys; print('out'); print('err', file=sys.stderr)",
+        ],
+        log_path=log_path,
+        label="install",
+    )
+
+    assert exit_code == 0
+    assert "out\n" in stream.getvalue()
+    assert "err\n" in stream.getvalue()
+    assert "out\n" in log_path.read_text(encoding="utf-8")
+    assert "err\n" in log_path.read_text(encoding="utf-8")
+    assert "Running install:" in stderr.getvalue()
+
+
+def test_subprocess_runner_logged_stream_merges_env(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+
+    exit_code = runner.run_stream_logged(
+        [sys.executable, "-u", "-c", "import os; print(os.environ['BONSAI_TEST_VALUE'])"],
+        env={"BONSAI_TEST_VALUE": "ok"},
+        log_path=tmp_path / "env.log",
+        label="setup",
+    )
+
+    assert exit_code == 0
+    assert stream.getvalue() == "ok\n"
+
+
+def test_recording_runner_records_logged_stream_command(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    log_path = tmp_path / "install.log"
+
+    exit_code = runner.run_stream_logged(
+        ["yarn", "install"],
+        cwd=Path("/tmp/repo"),
+        env={"FRONTEND_PORT": "4201"},
+        log_path=log_path,
+        label="install",
+    )
+
+    assert exit_code == 0
+    assert runner.commands == [
+        CommandSpec(
+            argv=("yarn", "install"),
+            cwd=Path("/tmp/repo"),
+            env=(("FRONTEND_PORT", "4201"),),
+            log_path=log_path,
+        )
+    ]

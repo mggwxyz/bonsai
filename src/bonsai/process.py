@@ -3,10 +3,11 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import sys
 from collections.abc import Mapping, Sequence
 from contextlib import nullcontext
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, TextIO
 
 from rich.console import Console
 from rich.text import Text
@@ -42,8 +43,9 @@ class Runner(Protocol):
 
 
 class SubprocessRunner:
-    def __init__(self, console: Console | None = None) -> None:
+    def __init__(self, console: Console | None = None, stream: TextIO | None = None) -> None:
         self.console = console or Console(stderr=True)
+        self.stream = stream or sys.stdout
 
     def status(self, argv: Sequence[str], cwd: Path | None):
         if not self.console.is_terminal:
@@ -103,6 +105,42 @@ class SubprocessRunner:
         )
         return completed.returncode
 
+    def run_stream_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path | None = None,
+        label: str | None = None,
+    ) -> int:
+        process_env = None
+        if env is not None:
+            process_env = os.environ.copy()
+            process_env.update(env)
+        if log_path is None:
+            return self.run_stream(argv, cwd=cwd, env=env)
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        label_text = f"{label}: " if label else ""
+        self.console.print(f"Running {label_text}{format_command(argv)}")
+        with log_path.open("w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=process_env,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+            )
+            if process.stdout is not None:
+                for chunk in process.stdout:
+                    self.stream.write(chunk)
+                    self.stream.flush()
+                    log_file.write(chunk)
+                    log_file.flush()
+            return process.wait()
+
 
 class RecordingRunner:
     def __init__(self) -> None:
@@ -127,4 +165,27 @@ class RecordingRunner:
     ) -> int:
         recorded_env = tuple(sorted(env.items())) if env is not None else ()
         self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+        return 0
+
+    def run_stream_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path | None = None,
+        label: str | None = None,
+    ) -> int:
+        _ = label
+        recorded_env = tuple(sorted(env.items())) if env is not None else ()
+        self.commands.append(
+            CommandSpec(
+                argv=tuple(argv),
+                cwd=cwd,
+                env=recorded_env,
+                log_path=log_path,
+            )
+        )
+        if log_path is not None:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_path.write_text("", encoding="utf-8")
         return 0
