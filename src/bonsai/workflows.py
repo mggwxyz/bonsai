@@ -282,12 +282,18 @@ def plan_move_worktree(
     if resolved.worktree.path == safe_new_folder:
         raise BonsaiWorkspaceError(f"Worktree already uses folder: {safe_new_folder}")
 
+    for branch, worktree in state.worktrees.items():
+        if branch != resolved.branch and worktree.path == safe_new_folder:
+            raise BonsaiWorkspaceError(f"Worktree target already exists: {safe_new_folder}")
+
     old_worktree_path = workspace_root / resolved.worktree.path
     new_worktree_path = workspace_root / safe_new_folder
-    if new_worktree_path.exists() and not _paths_refer_to_same_existing_path(
-        old_worktree_path,
-        new_worktree_path,
-    ):
+    case_only_samefile_move = (
+        old_worktree_path.name != new_worktree_path.name
+        and old_worktree_path.name.lower() == new_worktree_path.name.lower()
+        and _paths_refer_to_same_existing_path(old_worktree_path, new_worktree_path)
+    )
+    if new_worktree_path.exists() and not case_only_samefile_move:
         raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
 
     updated_worktree = replace(resolved.worktree, path=safe_new_folder)

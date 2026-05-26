@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 from test_config import VALID_CONFIG, write_config
 
+import bonsai.workflows as workflows
 from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
 from bonsai.config import load_config
 from bonsai.errors import BonsaiCommandError, BonsaiConfigError, BonsaiWorkspaceError
@@ -384,6 +385,82 @@ def test_plan_move_worktree_rejects_existing_distinct_target(tmp_path: Path) -> 
 
     with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
         plan_move_worktree(state, workspace_root, "feature", "taken")
+
+
+def test_plan_move_worktree_rejects_managed_path_collision_with_missing_directory(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+            "other": ManagedWorktree(path="taken", slug="other", slot=2),
+        },
+    )
+
+    assert not (workspace_root / "taken").exists()
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+        plan_move_worktree(state, workspace_root, "feature", "taken")
+
+
+def test_plan_move_worktree_allows_case_only_samefile_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    old_worktree = workspace_root / "mb-123"
+    new_worktree = workspace_root / "MB-123"
+    old_worktree.mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="mb-123", slug="mb-123", slot=1)},
+    )
+
+    original_exists = Path.exists
+
+    def fake_exists(path: Path) -> bool:
+        if path == new_worktree:
+            return True
+        return original_exists(path)
+
+    monkeypatch.setattr(Path, "exists", fake_exists)
+    monkeypatch.setattr(workflows, "_paths_refer_to_same_existing_path", lambda _left, _right: True)
+
+    plan = plan_move_worktree(state, workspace_root, "feature", "MB-123")
+
+    assert plan.old_worktree_path == old_worktree
+    assert plan.new_worktree_path == new_worktree
+    assert plan.updated_state.worktrees["feature"].path == "MB-123"
+
+
+def test_plan_move_worktree_rejects_samefile_alias_target(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    feature = workspace_root / "feature"
+    alias = workspace_root / "alias"
+    feature.mkdir(parents=True)
+    alias.symlink_to(feature, target_is_directory=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    assert alias.samefile(feature)
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+        plan_move_worktree(state, workspace_root, "feature", "alias")
 
 
 def test_plan_move_worktree_rejects_unsafe_target_folder(tmp_path: Path) -> None:
