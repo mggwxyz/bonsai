@@ -1113,8 +1113,10 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
             argv: list[str],
             cwd: Path | None = None,
             check: bool = True,
+            env=None,
         ) -> CommandResult:
-            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
             if argv[:3] == ["git", "ls-remote", "--symref"]:
                 return CommandResult(returncode=0, stdout="ref: refs/heads/main\tHEAD\n")
             if argv[:3] == ["git", "clone", "--branch"]:
@@ -1155,6 +1157,62 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
     assert plan.workspace_root == tmp_path / "authentic"
     assert (tmp_path / "authentic" / ".bonsai" / "state.json").exists()
     assert (tmp_path / "authentic" / "Caddyfile").exists()
+
+
+def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
+    tmp_path: Path,
+) -> None:
+    class MissingConfigCloneRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:3] == ["git", "ls-remote", "--symref"]:
+                return CommandResult(returncode=0, stdout="ref: refs/heads/main\tHEAD\n")
+            if argv[:3] == ["git", "clone", "--branch"]:
+                Path(argv[-1]).mkdir(parents=True)
+                return CommandResult(returncode=0)
+            return CommandResult(returncode=0)
+
+    def initializer(
+        config_path: Path,
+        _workspace_name: str,
+        _default_branch: str,
+        _default_worktree: Path,
+    ) -> None:
+        config_path.write_text(VALID_CONFIG, encoding="utf-8")
+
+    runner = MissingConfigCloneRunner()
+
+    execute_clone(
+        runner,
+        "git@github.com:org/authentic.git",
+        "authentic",
+        tmp_path,
+        config_initializer=initializer,
+    )
+
+    default_worktree = tmp_path / "authentic" / "main"
+    assert (default_worktree / ".env.local").exists()
+    install_command = runner.commands[-2]
+    setup_command = runner.commands[-1]
+    assert install_command.argv == ("yarn", "install")
+    assert install_command.cwd == default_worktree
+    assert setup_command.argv == ("yarn", "setup")
+    assert setup_command.cwd == default_worktree
+    setup_env = dict(setup_command.env)
+    assert setup_env["COMPOSE_PROJECT_NAME"] == "authentic-main"
+    assert setup_env["FRONTEND_PORT"] == "4200"
+    assert setup_env["API_PORT"] == "3333"
+    assert setup_env["DB_PORT"] == "5555"
 
 
 def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Path) -> None:

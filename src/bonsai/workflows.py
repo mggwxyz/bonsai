@@ -132,6 +132,13 @@ def plan_clone_workspace(
             path=workspace_root / root_caddyfile,
             content=render_root_caddyfile(snippets_dir),
         ),
+        *generated_worktree_files(
+            config,
+            branch=default_branch,
+            slot=0,
+            workspace_root=workspace_root,
+            worktree_path=default_worktree,
+        ),
     )
     return CloneWorkspacePlan(
         workspace_root=workspace_root,
@@ -141,13 +148,36 @@ def plan_clone_workspace(
     )
 
 
+def generated_worktree_files(
+    config: BonsaiConfig,
+    branch: str,
+    slot: int,
+    workspace_root: Path,
+    worktree_path: Path,
+) -> tuple[FileWrite, ...]:
+    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
+    slug = branch_slug(branch)
+    if slug == "":
+        raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
+    snippets_dir = workspace_root / snippets_dir_name
+    files = [
+        FileWrite(
+            path=worktree_path / ".env.local",
+            content=render_env_local(config, branch, slot, worktree_path),
+        )
+    ]
+    for service_name, content in render_caddy_snippets(config, branch, slot, worktree_path).items():
+        service_name = _safe_path_segment(service_name, "service name")
+        files.append(FileWrite(path=snippets_dir / f"{slug}-{service_name}.caddy", content=content))
+    return tuple(files)
+
+
 def plan_add_files(
     config: BonsaiConfig,
     state: BonsaiState,
     workspace_root: Path,
     branch: str,
 ) -> AddFilesPlan:
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     slug = branch_slug(branch)
     if slug == "":
         raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
@@ -159,14 +189,8 @@ def plan_add_files(
             raise BonsaiWorkspaceError(f"Branch worktree path conflicts with slug: {branch!r}")
         slot = existing_worktree.slot
     worktree_path = workspace_root / slug
-    snippets_dir = workspace_root / snippets_dir_name
     default_worktree_path = workspace_root / state.default_worktree
-    files: list[FileWrite] = [
-        FileWrite(
-            path=worktree_path / ".env.local",
-            content=render_env_local(config, branch, slot, worktree_path),
-        )
-    ]
+    files = list(generated_worktree_files(config, branch, slot, workspace_root, worktree_path))
     symlinks: list[FileSymlink] = []
     for shared_file in config.shared_files:
         source = _safe_path_segment(shared_file.source, "shared file source")
@@ -177,9 +201,6 @@ def plan_add_files(
                 target=worktree_path / target,
             )
         )
-    for service_name, content in render_caddy_snippets(config, branch, slot, worktree_path).items():
-        service_name = _safe_path_segment(service_name, "service name")
-        files.append(FileWrite(path=snippets_dir / f"{slug}-{service_name}.caddy", content=content))
 
     updated_state = update_worktree(
         state,
@@ -670,6 +691,11 @@ def execute_clone(
     plan = plan_clone_workspace(git_url, safe_name, default_branch, config, parent)
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
+    command_env = generated_worktree_env(plan.files)
+    if config.commands.install:
+        run_worktree_command(runner, config.commands.install, plan.default_worktree, command_env)
+    if config.commands.setup:
+        run_worktree_command(runner, config.commands.setup, plan.default_worktree, command_env)
     return plan
 
 
