@@ -44,6 +44,10 @@ from bonsai.models import (
     ResolvedWorktree,
     SyncFileAction,
     SyncPlan,
+    WorkspaceServiceSummary,
+    WorkspaceStatus,
+    WorkspaceSummary,
+    WorktreeSummary,
     WorktreeTarget,
 )
 from bonsai.ports import allocate_slot
@@ -713,6 +717,156 @@ def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
         raise BonsaiConfigError(f"Invalid primary URL template: {exc}") from exc
 
     return OpenUrlPlan(branch=branch, worktree_path=worktree_path, url=url)
+
+
+def _workspace_summary_commands() -> dict[str, str]:
+    return {
+        "context": "bonsai context --format json",
+        "status": "bonsai status",
+        "list": "bonsai list",
+        "start": "bonsai start",
+        "open": "bonsai open",
+        "sync": "bonsai sync --apply",
+        "doctor": "bonsai doctor",
+    }
+
+
+def _env_file_status(config: BonsaiConfig, target: WorktreeTarget) -> str:
+    desired_env = render_env_local(
+        config,
+        target.branch,
+        target.worktree.slot,
+        target.worktree_path,
+    )
+    env_file_path = target.worktree_path / ".env.local"
+    if not env_file_path.exists():
+        return "missing"
+    if env_file_path.read_text(encoding="utf-8") == desired_env:
+        return "current"
+    return "stale"
+
+
+def _service_summaries(
+    config: BonsaiConfig,
+    branch: str,
+    slot: int,
+    worktree_path: Path,
+) -> tuple[WorkspaceServiceSummary, ...]:
+    values = template_values(config, branch, slot, worktree_path)
+    services: list[WorkspaceServiceSummary] = []
+    for service in config.services:
+        url = None
+        if service.url is not None:
+            try:
+                url = render_template(service.url, values)
+            except KeyError as exc:
+                key = exc.args[0]
+                raise BonsaiConfigError(
+                    f"Service {service.name} URL uses unknown template key: {key}"
+                ) from exc
+            except ValueError as exc:
+                raise BonsaiConfigError(
+                    f"Invalid service {service.name} URL template: {exc}"
+                ) from exc
+        services.append(
+            WorkspaceServiceSummary(
+                name=service.name,
+                port_env=service.port_env,
+                port=int(values[service.port_env]),
+                public=service.public,
+                primary=service.primary,
+                url=url,
+            )
+        )
+    return tuple(services)
+
+
+def _worktree_summary(
+    config: BonsaiConfig,
+    branch: str,
+    worktree: ManagedWorktree,
+    worktree_path: Path,
+    kind: str,
+) -> WorktreeSummary:
+    target = WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
+    return WorktreeSummary(
+        branch=branch,
+        worktree_path=worktree_path,
+        relative_path=worktree.path,
+        slug=worktree.slug,
+        slot=worktree.slot,
+        kind=kind,
+        env_file_path=worktree_path / ".env.local",
+        env_file_status=_env_file_status(config, target),
+        services=_service_summaries(config, branch, worktree.slot, worktree_path),
+    )
+
+
+def plan_workspace_summary(workspace_root: Path) -> WorkspaceSummary:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    config_path = config.path or resolve_workspace_config_path(
+        workspace_root,
+        state.default_worktree,
+    )
+    targets = _configured_worktree_targets(state, workspace_root)
+    default_target = targets[0]
+    managed_targets = sorted(targets[1:], key=lambda target: target.branch.lower())
+    worktrees = [
+        _worktree_summary(
+            config,
+            default_target.branch,
+            default_target.worktree,
+            default_target.worktree_path,
+            "default",
+        )
+    ]
+    worktrees.extend(
+        _worktree_summary(
+            config,
+            target.branch,
+            target.worktree,
+            target.worktree_path,
+            "managed",
+        )
+        for target in managed_targets
+    )
+    return WorkspaceSummary(
+        workspace_name=state.name,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
+        default_worktree=state.default_worktree,
+        config_path=config_path,
+        worktrees=tuple(worktrees),
+        commands=_workspace_summary_commands(),
+    )
+
+
+def plan_current_worktree_status(
+    workspace_root: Path,
+    current_path: Path,
+) -> WorkspaceStatus:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    config_path = config.path or resolve_workspace_config_path(
+        workspace_root,
+        state.default_worktree,
+    )
+    branch, worktree, worktree_path = _resolve_current_worktree(
+        state,
+        workspace_root,
+        current_path,
+    )
+    kind = "default" if branch == state.default_branch else "managed"
+    return WorkspaceStatus(
+        workspace_name=state.name,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
+        default_worktree=state.default_worktree,
+        config_path=config_path,
+        current=_worktree_summary(config, branch, worktree, worktree_path, kind),
+        commands=_workspace_summary_commands(),
+    )
 
 
 def plan_agent_context(workspace_root: Path, current_path: Path) -> AgentContext:

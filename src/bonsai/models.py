@@ -247,3 +247,48 @@ class AgentContext:
     generated_env: dict[str, str]
     services: tuple[AgentServiceContext, ...]
     commands: dict[str, str]
+
+
+@dataclass(frozen=True)
+class WorkspaceServiceSummary:
+    name: str
+    port_env: str
+    port: int
+    public: bool
+    primary: bool
+    url: str | None
+
+
+@dataclass(frozen=True)
+class WorktreeSummary:
+    branch: str
+    worktree_path: Path
+    relative_path: str
+    slug: str
+    slot: int
+    kind: str
+    env_file_path: Path
+    env_file_status: str
+    services: tuple[WorkspaceServiceSummary, ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceSummary:
+    workspace_name: str
+    workspace_root: Path
+    default_branch: str
+    default_worktree: str
+    config_path: Path
+    worktrees: tuple[WorktreeSummary, ...]
+    commands: dict[str, str]
+
+
+@dataclass(frozen=True)
+class WorkspaceStatus:
+    workspace_name: str
+    workspace_root: Path
+    default_branch: str
+    default_worktree: str
+    config_path: Path
+    current: WorktreeSummary
+    commands: dict[str, str]
