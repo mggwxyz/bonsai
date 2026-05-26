@@ -284,8 +284,13 @@ def plan_move_worktree(
 
     old_worktree_path = workspace_root / resolved.worktree.path
     new_worktree_path = workspace_root / safe_new_folder
+    if safe_new_folder in default_names:
+        raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
+
     for branch, worktree in state.worktrees.items():
-        if branch != resolved.branch and worktree.path == safe_new_folder:
+        if branch == resolved.branch:
+            continue
+        if safe_new_folder in {branch, worktree.path, worktree.slug}:
             raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
 
     target_is_symlink = new_worktree_path.is_symlink()

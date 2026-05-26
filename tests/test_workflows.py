@@ -370,6 +370,43 @@ def test_plan_move_worktree_rejects_default_worktree(tmp_path: Path) -> None:
         plan_move_worktree(state, tmp_path / "authentic", "main", "Main")
 
 
+def test_plan_move_worktree_rejects_unknown_worktree(tmp_path: Path) -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Unknown worktree: missing"):
+        plan_move_worktree(state, tmp_path / "authentic", "missing", "target")
+
+
+def test_plan_move_worktree_rejects_missing_default_path_collision(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    target = workspace_root / "main"
+    assert not target.exists()
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=re.escape(f"Worktree target already exists: {target}"),
+    ):
+        plan_move_worktree(state, workspace_root, "feature", "main")
+
+
 def test_plan_move_worktree_rejects_existing_distinct_target(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     (workspace_root / "feature").mkdir(parents=True)
@@ -411,6 +448,98 @@ def test_plan_move_worktree_rejects_managed_path_collision_with_missing_director
         match=re.escape(f"Worktree target already exists: {target}"),
     ):
         plan_move_worktree(state, workspace_root, "feature", "taken")
+
+
+def test_plan_move_worktree_rejects_other_branch_identifier_collision(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+            "other-branch": ManagedWorktree(
+                path="other-path",
+                slug="other-slug",
+                slot=2,
+            ),
+        },
+    )
+
+    target = workspace_root / "other-branch"
+    assert not target.exists()
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=re.escape(f"Worktree target already exists: {target}"),
+    ):
+        plan_move_worktree(state, workspace_root, "feature", "other-branch")
+
+
+def test_plan_move_worktree_rejects_other_slug_identifier_collision(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+            "other-branch": ManagedWorktree(
+                path="other-path",
+                slug="other-slug",
+                slot=2,
+            ),
+        },
+    )
+
+    target = workspace_root / "other-slug"
+    assert not target.exists()
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=re.escape(f"Worktree target already exists: {target}"),
+    ):
+        plan_move_worktree(state, workspace_root, "feature", "other-slug")
+
+
+def test_plan_move_worktree_allows_own_branch_identifier_as_target(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    old_worktree = workspace_root / "old-folder"
+    old_worktree.mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "MB-123": ManagedWorktree(
+                path="old-folder",
+                slug="mb-123",
+                slot=1,
+            )
+        },
+    )
+
+    plan = plan_move_worktree(state, workspace_root, "MB-123", "MB-123")
+
+    assert plan.branch == "MB-123"
+    assert plan.old_worktree_path == old_worktree
+    assert plan.new_worktree_path == workspace_root / "MB-123"
+    moved = plan.updated_state.worktrees["MB-123"]
+    assert moved.path == "MB-123"
+    assert moved.slug == "mb-123"
+    assert moved.slot == 1
 
 
 def test_plan_move_worktree_allows_case_only_samefile_target(
