@@ -99,6 +99,7 @@ bonsai add ma-123-implement-auth
 bonsai checkout ma-123-implement-auth
 bonsai remove ma-123-implement-auth
 bonsai start
+bonsai logs
 bonsai open
 bonsai context
 bonsai agent-guide
@@ -119,11 +120,18 @@ config; otherwise it writes to the current checkout.
 
 Configured `install` and `setup` commands run from the target worktree with
 Bonsai's generated `.env.local` values available in the subprocess environment.
+Their output is streamed live and also saved under
+`.bonsai/logs/<worktree>/`.
 
 `bonsai start [branch]` runs the configured `[commands].start` command in the
 target worktree. With no branch, it uses the current worktree. The process runs
 in the foreground with values from the generated `.env.local` added to the
-environment.
+environment. Output streams live and is saved as a managed `start` log, but
+Bonsai does not daemonize, supervise, or automatically restart the process.
+
+`bonsai logs [branch]` prints the latest managed lifecycle log for a worktree.
+Use `--command install`, `--command setup`, or `--command start` to filter to
+the latest log for a specific command kind.
 
 ## Shell Integration
 

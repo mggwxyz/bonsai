@@ -10,7 +10,7 @@ from bonsai.caddy import caddy_reload_plan
 from bonsai.compose import detect_compose_project, teardown_compose_project
 from bonsai.config import load_config
 from bonsai.env import parse_env_content
-from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
+from bonsai.errors import BonsaiCommandError, BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
     add_existing_worktree,
     add_new_worktree,
@@ -25,6 +25,7 @@ from bonsai.git import (
 from bonsai.git import (
     remove_worktree as git_remove_worktree,
 )
+from bonsai.logs import LogKind, latest_command_log, next_command_log_path
 from bonsai.models import (
     AddFilesPlan,
     AgentContext,
@@ -35,6 +36,7 @@ from bonsai.models import (
     CleanupItem,
     CleanupPlan,
     CloneWorkspacePlan,
+    CommandLogPlan,
     CommandSpec,
     DoctorCheck,
     DoctorReport,
@@ -771,10 +773,31 @@ def execute_start(
             f"Missing generated env file at {env_path}. Run: bonsai sync --apply"
         )
     env = parse_env_content(env_path.read_text(encoding="utf-8"))
-    return runner.run_stream(
-        shlex.split(config.commands.start),
+    return run_lifecycle_command(
+        runner,
+        workspace_root=workspace_root,
+        worktree_slug=target.worktree.slug,
+        kind="start",
+        command=config.commands.start,
         cwd=target.worktree_path,
         env=env,
+        check=False,
+    )
+
+
+def plan_command_log(
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+    kind: str | None,
+) -> CommandLogPlan:
+    target = resolve_start_target(workspace_root, name, current_path)
+    log_path = latest_command_log(workspace_root, target.worktree.slug, kind)
+    return CommandLogPlan(
+        branch=target.branch,
+        worktree_path=target.worktree_path,
+        log_path=log_path,
+        content=log_path.read_text(encoding="utf-8"),
     )
 
 
@@ -1068,6 +1091,27 @@ def run_worktree_command(
     runner.run(shlex.split(command), cwd=cwd, env=env)
 
 
+def run_lifecycle_command(
+    runner: Runner,
+    workspace_root: Path,
+    worktree_slug: str,
+    kind: LogKind,
+    command: str,
+    cwd: Path,
+    env: Mapping[str, str],
+    check: bool = True,
+) -> int:
+    argv = shlex.split(command)
+    log_path = next_command_log_path(workspace_root, worktree_slug, kind)
+    exit_code = runner.run_stream_logged(argv, cwd=cwd, env=env, log_path=log_path, label=kind)
+
+    if check and exit_code != 0:
+        raise BonsaiCommandError(
+            f"Command failed ({exit_code}): {format_command(argv, cwd=cwd)}\nLog: {log_path}"
+        )
+    return exit_code
+
+
 def reload_workspace_caddy(runner: Runner, config: BonsaiConfig, workspace_root: Path) -> None:
     root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
     command = caddy_reload_plan(workspace_root / root_caddyfile)
@@ -1098,10 +1142,27 @@ def execute_clone(
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
     command_env = generated_worktree_env(plan.files)
+    default_worktree_slug = branch_slug(plan.state.default_branch)
     if config.commands.install:
-        run_worktree_command(runner, config.commands.install, plan.default_worktree, command_env)
+        run_lifecycle_command(
+            runner,
+            workspace_root=plan.workspace_root,
+            worktree_slug=default_worktree_slug,
+            kind="install",
+            command=config.commands.install,
+            cwd=plan.default_worktree,
+            env=command_env,
+        )
     if config.commands.setup:
-        run_worktree_command(runner, config.commands.setup, plan.default_worktree, command_env)
+        run_lifecycle_command(
+            runner,
+            workspace_root=plan.workspace_root,
+            worktree_slug=default_worktree_slug,
+            kind="setup",
+            command=config.commands.setup,
+            cwd=plan.default_worktree,
+            env=command_env,
+        )
     return plan
 
 
@@ -1139,10 +1200,27 @@ def execute_add(
     save_state(state_path, plan.updated_state)
     reload_workspace_caddy(runner, config, workspace_root)
     command_env = generated_worktree_env(plan.files)
+    worktree_slug = plan.updated_state.worktrees[branch].slug
     if config.commands.install:
-        run_worktree_command(runner, config.commands.install, plan.worktree_path, command_env)
+        run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug=worktree_slug,
+            kind="install",
+            command=config.commands.install,
+            cwd=plan.worktree_path,
+            env=command_env,
+        )
     if config.commands.setup:
-        run_worktree_command(runner, config.commands.setup, plan.worktree_path, command_env)
+        run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug=worktree_slug,
+            kind="setup",
+            command=config.commands.setup,
+            cwd=plan.worktree_path,
+            env=command_env,
+        )
     return plan
 
 

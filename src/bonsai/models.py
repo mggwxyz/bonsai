@@ -107,6 +107,7 @@ class CommandSpec:
     argv: tuple[str, ...]
     cwd: Path | None = None
     env: tuple[tuple[str, str], ...] = ()
+    log_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -237,6 +238,14 @@ class OpenUrlPlan:
     branch: str
     worktree_path: Path
     url: str
+
+
+@dataclass(frozen=True)
+class CommandLogPlan:
+    branch: str
+    worktree_path: Path
+    log_path: Path
+    content: str
 
 
 @dataclass(frozen=True)
