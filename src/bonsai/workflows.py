@@ -8,6 +8,7 @@ from pathlib import Path
 
 from bonsai.caddy import caddy_reload_plan
 from bonsai.config import load_config
+from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
     add_existing_worktree,
@@ -809,19 +810,6 @@ def command_summary(command: CommandSpec) -> str:
 def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
     for command in commands:
         runner.run(list(command.argv), cwd=command.cwd, env=dict(command.env))
-
-
-def parse_env_content(content: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            raise BonsaiWorkspaceError(f"Invalid environment line: {line}")
-        name, value = stripped.split("=", 1)
-        values[name] = value
-    return values
 
 
 def generated_worktree_env(files: tuple[FileWrite, ...]) -> dict[str, str]:
