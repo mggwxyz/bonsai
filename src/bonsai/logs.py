@@ -99,6 +99,11 @@ def _parse_command_log_name(name: str) -> _ParsedCommandLogName | None:
     return _ParsedCommandLogName(match.group("timestamp"), kind, suffix, name)
 
 
+def _matches_kind(path: Path, kind: str) -> bool:
+    parsed = _parse_command_log_name(path.name)
+    return parsed is not None and parsed.kind == kind
+
+
 def _coerce_log_kind(kind: str) -> LogKind | None:
     if kind not in LOG_KINDS:
         return None

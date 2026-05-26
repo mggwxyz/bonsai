@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from bonsai import logs
 from bonsai.errors import BonsaiWorkspaceError
 from bonsai.logs import latest_command_log, next_command_log_path, validate_log_kind
 
@@ -80,6 +81,14 @@ def test_latest_command_log_ignores_malformed_kind_suffix(tmp_path: Path) -> Non
     malformed.write_text("debug\n", encoding="utf-8")
 
     assert latest_command_log(tmp_path, "feature-auth", "install") == install
+
+
+def test_matches_kind_uses_strict_filename_parser(tmp_path: Path) -> None:
+    matcher = getattr(logs, "_matches_kind", None)
+    assert matcher is not None
+    assert matcher(tmp_path / "20260526-143012-install.log", "install")
+    assert matcher(tmp_path / "20260526-143012-install-2.log", "install")
+    assert not matcher(tmp_path / "20260526-143012-install-debug.log", "install")
 
 
 def test_latest_command_log_orders_suffixed_collision_logs(tmp_path: Path) -> None:
