@@ -40,6 +40,7 @@ from bonsai.workflows import (
     plan_add_files,
     plan_agent_context,
     plan_clone_workspace,
+    plan_command_log,
     plan_open_url,
     plan_sync,
     resolve_start_target,
@@ -2562,6 +2563,67 @@ def test_execute_start_requires_generated_env_file(tmp_path: Path) -> None:
 
     with pytest.raises(BonsaiWorkspaceError, match=r"bonsai sync --apply"):
         execute_start(RecordingRunner(), workspace_root, None, default_worktree)
+
+
+def test_plan_command_log_reads_latest_log_for_current_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    log_dir = workspace_root / ".bonsai" / "logs" / "main"
+    log_dir.mkdir(parents=True)
+    (log_dir / "20260526-143012-install.log").write_text("install\n", encoding="utf-8")
+    latest = log_dir / "20260526-143245-setup.log"
+    latest.write_text("setup\n", encoding="utf-8")
+
+    plan = plan_command_log(workspace_root, None, default_worktree, None)
+
+    assert plan.branch == "main"
+    assert plan.worktree_path == default_worktree
+    assert plan.log_path == latest
+    assert plan.content == "setup\n"
+
+
+def test_plan_command_log_filters_by_command_for_named_worktree(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+    log_dir = workspace_root / ".bonsai" / "logs" / "feature"
+    log_dir.mkdir(parents=True)
+    setup = log_dir / "20260526-143245-setup.log"
+    start = log_dir / "20260526-143300-start.log"
+    setup.write_text("setup\n", encoding="utf-8")
+    start.write_text("start\n", encoding="utf-8")
+
+    plan = plan_command_log(workspace_root, "feature", default_worktree, "setup")
+
+    assert plan.branch == "feature"
+    assert plan.worktree_path == feature_worktree
+    assert plan.log_path == setup
+    assert plan.content == "setup\n"
 
 
 def test_execute_checkout_adds_missing_branch_with_existing_add_workflow(tmp_path: Path) -> None:

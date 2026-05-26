@@ -60,6 +60,7 @@ def test_help_lists_core_commands() -> None:
     assert "doctor" in result.stdout
     assert "agent-guide" in result.stdout
     assert "context" in result.stdout
+    assert "logs" in result.stdout
 
 
 def test_agent_guide_prints_package_level_agent_rules() -> None:
@@ -762,6 +763,51 @@ def test_start_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 7
     assert calls == [(tmp_path, "feature", tmp_path)]
     assert "Starting feature" in result.stdout
+
+
+def test_logs_command_prints_latest_log_for_current_worktree(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    log_dir = tmp_path / ".bonsai" / "logs" / "main"
+    log_dir.mkdir(parents=True)
+    (log_dir / "20260526-143012-install.log").write_text("install\n", encoding="utf-8")
+    latest = log_dir / "20260526-143245-setup.log"
+    latest.write_text("setup\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["logs"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "setup\n"
+
+
+def test_logs_command_filters_by_command_and_branch(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    log_dir = tmp_path / ".bonsai" / "logs" / "ma-123-test"
+    log_dir.mkdir(parents=True)
+    (log_dir / "20260526-143012-install.log").write_text("install\n", encoding="utf-8")
+    (log_dir / "20260526-143245-setup.log").write_text("setup\n", encoding="utf-8")
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["logs", "MA-123-test", "--command", "install"])
+
+    assert result.exit_code == 0
+    assert result.stdout == "install\n"
+
+
+def test_logs_command_reports_missing_logs(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["logs", "--command", "start"])
+
+    assert result.exit_code == 1
+    assert "No logs found for main with command start" in result.stdout
 
 
 def test_sync_dry_run_reports_planned_actions(monkeypatch, tmp_path: Path) -> None:

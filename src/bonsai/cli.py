@@ -29,6 +29,7 @@ from bonsai.workflows import (
     execute_start,
     execute_sync,
     plan_agent_context,
+    plan_command_log,
     plan_open_url,
     workspace_config_path,
 )
@@ -376,6 +377,22 @@ def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
         console.print(f"Starting {label}")
         exit_code = execute_start(SubprocessRunner(), root_path, branch, Path.cwd())
         raise typer.Exit(code=exit_code)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("logs")
+def logs_command(
+    branch: Annotated[str | None, typer.Argument()] = None,
+    command: Annotated[
+        str | None,
+        typer.Option("--command", help="Filter logs by command: install, setup, or start."),
+    ] = None,
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_command_log(root_path, branch, Path.cwd(), command)
+        typer.echo(plan.content, nl=False)
     except BonsaiError as exc:
         _fail(exc)
 

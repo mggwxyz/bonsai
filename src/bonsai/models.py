@@ -223,6 +223,14 @@ class OpenUrlPlan:
 
 
 @dataclass(frozen=True)
+class CommandLogPlan:
+    branch: str
+    worktree_path: Path
+    log_path: Path
+    content: str
+
+
+@dataclass(frozen=True)
 class AgentServiceContext:
     name: str
     port_env: str

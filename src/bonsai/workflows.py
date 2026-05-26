@@ -23,7 +23,7 @@ from bonsai.git import (
 from bonsai.git import (
     remove_worktree as git_remove_worktree,
 )
-from bonsai.logs import LogKind, next_command_log_path
+from bonsai.logs import LogKind, latest_command_log, next_command_log_path
 from bonsai.models import (
     AddFilesPlan,
     AgentContext,
@@ -34,6 +34,7 @@ from bonsai.models import (
     CleanupItem,
     CleanupPlan,
     CloneWorkspacePlan,
+    CommandLogPlan,
     CommandSpec,
     DoctorCheck,
     DoctorReport,
@@ -694,6 +695,22 @@ def execute_start(
         cwd=target.worktree_path,
         env=env,
         check=False,
+    )
+
+
+def plan_command_log(
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+    kind: str | None,
+) -> CommandLogPlan:
+    target = resolve_start_target(workspace_root, name, current_path)
+    log_path = latest_command_log(workspace_root, target.worktree.slug, kind)
+    return CommandLogPlan(
+        branch=target.branch,
+        worktree_path=target.worktree_path,
+        log_path=log_path,
+        content=log_path.read_text(encoding="utf-8"),
     )
 
 
