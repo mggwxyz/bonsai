@@ -1903,6 +1903,15 @@ def test_execute_init_adopts_existing_checkout_config(tmp_path: Path) -> None:
                     returncode=0,
                     stdout="git@github.com:org/authentic.git\n",
                 )
+            if argv[-3:] == ["worktree", "list", "--porcelain"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        f"worktree {default_worktree}\n"
+                        "HEAD 0000000000000000000000000000000000000000\n"
+                        "branch refs/heads/main\n"
+                    ),
+                )
             raise AssertionError(f"unexpected command: {argv}")
 
     plan = execute_init(ExistingCheckoutRunner(), default_worktree)
@@ -1918,6 +1927,55 @@ def test_execute_init_adopts_existing_checkout_config(tmp_path: Path) -> None:
     assert (default_worktree / ".bonsai.toml").read_text(encoding="utf-8") == VALID_CONFIG
     assert (default_worktree / ".env.local").exists()
     assert (workspace_root / "Caddyfile").exists()
+
+
+def test_execute_init_adopts_existing_sibling_worktrees(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "ma-123-auth"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+
+    class ExistingCheckoutRunner:
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            _ = (cwd, check, env)
+            if argv[-2:] == ["--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="main\n")
+            if argv[-3:] == ["config", "--get", "remote.origin.url"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="git@github.com:org/authentic.git\n",
+                )
+            if argv[-3:] == ["worktree", "list", "--porcelain"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        f"worktree {default_worktree}\n"
+                        "HEAD 0000000000000000000000000000000000000000\n"
+                        "branch refs/heads/main\n"
+                        "\n"
+                        f"worktree {feature_worktree}\n"
+                        "HEAD 1111111111111111111111111111111111111111\n"
+                        "branch refs/heads/MA-123-auth\n"
+                    ),
+                )
+            raise AssertionError(f"unexpected command: {argv}")
+
+    execute_init(ExistingCheckoutRunner(), default_worktree)
+
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.worktrees == {
+        "MA-123-auth": ManagedWorktree(path="ma-123-auth", slug="ma-123-auth", slot=1)
+    }
+    assert (feature_worktree / ".env.local").exists()
+    assert (workspace_root / "caddy.d" / "ma-123-auth-frontend.caddy").exists()
 
 
 def test_execute_init_rejects_checkout_directory_that_does_not_match_branch(

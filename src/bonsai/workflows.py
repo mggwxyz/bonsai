@@ -19,6 +19,7 @@ from bonsai.git import (
     discover_default_branch,
     fetch_origin,
     is_git_worktree,
+    list_worktrees,
     remote_branch_exists,
     remote_origin_url,
     worktree_has_changes,
@@ -1209,15 +1210,34 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
     root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
     snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     snippets_dir = workspace_root / snippets_dir_name
+    adopted_worktrees: dict[str, ManagedWorktree] = {}
+    workspace_root_resolved = workspace_root.resolve()
+    checkout_path_resolved = checkout_path.resolve()
+    for git_worktree in list_worktrees(runner, checkout_path):
+        worktree_path = git_worktree.path.resolve()
+        branch = git_worktree.branch
+        if branch is None or worktree_path == checkout_path_resolved:
+            continue
+        if worktree_path.parent != workspace_root_resolved:
+            continue
+        relative_path = _safe_path_segment(worktree_path.name, "worktree path")
+        slug = branch_slug(branch)
+        if slug == "":
+            raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
+        adopted_worktrees[branch] = ManagedWorktree(
+            path=relative_path,
+            slug=slug,
+            slot=len(adopted_worktrees) + 1,
+        )
     state = BonsaiState(
         version=1,
         name=workspace_root.name,
         default_branch=default_branch,
         default_worktree=default_worktree,
         repo_url=remote_origin_url(runner, checkout_path),
-        worktrees={},
+        worktrees=adopted_worktrees,
     )
-    files = (
+    files = [
         FileWrite(
             path=workspace_root / root_caddyfile,
             content=render_root_caddyfile(snippets_dir),
@@ -1229,12 +1249,22 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
             workspace_root=workspace_root,
             worktree_path=checkout_path,
         ),
-    )
+    ]
+    for branch, worktree in adopted_worktrees.items():
+        files.extend(
+            generated_worktree_files(
+                config,
+                branch=branch,
+                slot=worktree.slot,
+                workspace_root=workspace_root,
+                worktree_path=workspace_root / worktree.path,
+            )
+        )
     plan = CloneWorkspacePlan(
         workspace_root=workspace_root,
         default_worktree=checkout_path,
         state=state,
-        files=files,
+        files=tuple(files),
     )
     write_files(plan.files)
     save_state(state_path, state)
