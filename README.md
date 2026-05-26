@@ -103,6 +103,7 @@ bonsai open
 bonsai context
 bonsai agent-guide
 bonsai list
+bonsai status
 bonsai sync
 bonsai cleanup
 bonsai doctor
@@ -160,9 +161,18 @@ open PRs, unmerged closed PRs, or uncommitted changes are skipped; pass
 Run `bonsai open` from inside a worktree to open that worktree's primary local
 URL in your default browser.
 
-`bonsai context` prints the current worktree's Bonsai facts for humans and
-automation: workspace root, branch, slot, generated `.env.local` status,
-service ports, service URLs, and recommended Bonsai commands. Use
+`bonsai list` prints every configured worktree with branch, path, slot, kind,
+generated `.env.local` status, service ports, and service URLs. Use
+`bonsai list --format json` for a machine-readable workspace overview.
+
+`bonsai status` prints the current worktree's Bonsai facts: workspace root,
+config path, branch, slot, generated `.env.local` status, service ports, service
+URLs, and recommended Bonsai commands. Use `bonsai status --format json` when a
+script needs the current worktree summary.
+
+`bonsai context` prints the current worktree's agent-oriented Bonsai facts for
+humans and automation: workspace root, branch, slot, generated `.env.local`
+status, service ports, service URLs, and recommended Bonsai commands. Use
 `bonsai context --format json` when an AI agent or script needs exact
 worktree-scoped ports and URLs.
 
