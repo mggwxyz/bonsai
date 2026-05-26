@@ -291,6 +291,7 @@ def plan_move_worktree(
     case_only_samefile_move = (
         old_worktree_path.name != new_worktree_path.name
         and old_worktree_path.name.lower() == new_worktree_path.name.lower()
+        and not new_worktree_path.is_symlink()
         and _paths_refer_to_same_existing_path(old_worktree_path, new_worktree_path)
     )
     if new_worktree_path.exists() and not case_only_samefile_move:

@@ -463,6 +463,44 @@ def test_plan_move_worktree_rejects_samefile_alias_target(tmp_path: Path) -> Non
         plan_move_worktree(state, workspace_root, "feature", "alias")
 
 
+def test_plan_move_worktree_rejects_case_only_samefile_symlink_target(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    feature = workspace_root / "feature"
+    alias = workspace_root / "Feature"
+    feature.mkdir(parents=True)
+    try:
+        alias.symlink_to(feature, target_is_directory=True)
+    except FileExistsError:
+        original_is_symlink = Path.is_symlink
+
+        def fake_is_symlink(path: Path) -> bool:
+            if path == alias:
+                return True
+            return original_is_symlink(path)
+
+        monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
+        monkeypatch.setattr(
+            workflows,
+            "_paths_refer_to_same_existing_path",
+            lambda _left, _right: True,
+        )
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    assert alias.is_symlink()
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+        plan_move_worktree(state, workspace_root, "feature", "Feature")
+
+
 def test_plan_move_worktree_rejects_unsafe_target_folder(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     (workspace_root / "feature").mkdir(parents=True)
