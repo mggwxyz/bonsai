@@ -392,16 +392,45 @@ def test_resolve_editor_command_falls_back_to_code(monkeypatch) -> None:
     monkeypatch.setattr(
         cli.shutil,
         "which",
-        lambda name: "/usr/local/bin/code" if name == "code" else None,
+        lambda name, path=None: "/usr/local/bin/code" if name == "code" else None,
     )
 
     assert cli._resolve_editor_command() == ["/usr/local/bin/code"]
 
 
+def test_resolve_editor_command_uses_environ_path_for_code_fallback(monkeypatch) -> None:
+    calls = []
+
+    def fake_which(name: str, path: str | None = None) -> str | None:
+        calls.append((name, path))
+        if name == "code" and path == "/custom/bin":
+            return "/custom/bin/code"
+        return None
+
+    monkeypatch.setattr(cli.shutil, "which", fake_which)
+
+    assert cli._resolve_editor_command({"PATH": "/custom/bin"}) == ["/custom/bin/code"]
+    assert calls == [("code", "/custom/bin")]
+
+
+def test_resolve_editor_command_rejects_empty_executable(monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid editor command"):
+        cli._resolve_editor_command({"VISUAL": "''", "PATH": ""})
+
+
+def test_resolve_editor_command_rejects_malformed_command(monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid editor command"):
+        cli._resolve_editor_command({"VISUAL": "'code", "PATH": ""})
+
+
 def test_resolve_editor_command_fails_when_no_editor_is_available(monkeypatch) -> None:
     monkeypatch.delenv("VISUAL", raising=False)
     monkeypatch.delenv("EDITOR", raising=False)
-    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
 
     with pytest.raises(BonsaiWorkspaceError, match="No editor configured"):
         cli._resolve_editor_command()
@@ -442,6 +471,21 @@ def test_open_editor_reports_nonzero_exit(monkeypatch, tmp_path: Path) -> None:
     )
 
     with pytest.raises(BonsaiWorkspaceError, match="Editor exited with code 2"):
+        cli._open_editor(tmp_path / "feature")
+
+
+def test_open_editor_reports_os_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VISUAL", "code")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    def fail_run(_argv, check: bool = False):
+        _ = check
+        raise OSError("launch failed")
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_run)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Failed to open editor"):
         cli._open_editor(tmp_path / "feature")
 
 

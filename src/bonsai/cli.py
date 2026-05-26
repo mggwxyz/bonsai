@@ -107,10 +107,12 @@ def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[st
             argv = shlex.split(configured)
         except ValueError as exc:
             raise BonsaiWorkspaceError(f"Invalid editor command: {configured}") from exc
-        if argv:
+        if argv and argv[0]:
             return argv
+        raise BonsaiWorkspaceError(f"Invalid editor command: {configured}")
 
-    code = shutil.which("code")
+    path = None if environ is None else env.get("PATH", "")
+    code = shutil.which("code", path=path)
     if code is not None:
         return [code]
 
