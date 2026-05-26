@@ -183,6 +183,32 @@ def test_subprocess_runner_streams_stdout_and_stderr_to_log_and_stream(
     assert format_command([sys.executable], cwd=tmp_path).split(" && ")[0] in stderr.getvalue()
 
 
+def test_subprocess_runner_logged_stream_treats_command_as_literal_text(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    stderr = io.StringIO()
+    console = Console(
+        file=stderr,
+        force_terminal=True,
+        color_system=None,
+        width=120,
+    )
+    runner = SubprocessRunner(console=console, stream=stream)
+    log_path = tmp_path / "literal.log"
+
+    exit_code = runner.run_stream_logged(
+        [sys.executable, "-u", "-c", "print('[/]')"],
+        log_path=log_path,
+        label="literal",
+    )
+
+    assert exit_code == 0
+    assert stream.getvalue() == "[/]\n"
+    assert log_path.read_text(encoding="utf-8") == "[/]\n"
+    assert "[/]" in stderr.getvalue()
+
+
 def test_runner_protocol_includes_logged_stream() -> None:
     annotations = Runner.run_stream_logged.__annotations__
 

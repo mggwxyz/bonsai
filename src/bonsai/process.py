@@ -133,7 +133,7 @@ class SubprocessRunner:
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         label_text = f"{label}: " if label else ""
-        self.console.print(f"Running {label_text}{format_command(argv, cwd=cwd)}")
+        self.console.print(Text(f"Running {label_text}{format_command(argv, cwd=cwd)}"))
         with log_path.open("w", encoding="utf-8") as log_file:
             process = subprocess.Popen(
                 argv,
