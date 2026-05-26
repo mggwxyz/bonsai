@@ -806,11 +806,69 @@ def test_sync_apply_passes_apply_true(monkeypatch, tmp_path: Path) -> None:
     assert "No sync changes" in result.stdout
 
 
-def test_cleanup_dry_run_command_exists() -> None:
+def test_cleanup_dry_run_reports_pr_aware_plan(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_cleanup(_runner, root: Path, apply: bool = False, force: bool = False):
+        calls.append((root, apply, force))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="feature",
+                    action="remove",
+                    reason="pull request is merged",
+                    pr_url="https://github.com/org/repo/pull/1",
+                    worktree_path=tmp_path / "feature",
+                ),
+                SimpleNamespace(
+                    branch="open",
+                    action="skip",
+                    reason="pull request is open",
+                    pr_url="https://github.com/org/repo/pull/2",
+                    worktree_path=tmp_path / "open",
+                ),
+            ],
+        )
+
+    monkeypatch.setattr(cli, "execute_cleanup", fake_execute_cleanup, raising=False)
+
     result = runner.invoke(cli.app, ["cleanup"])
 
     assert result.exit_code == 0
+    assert calls == [(tmp_path, False, False)]
     assert "dry run" in result.stdout.lower()
+    assert "remove feature" in result.stdout
+    assert "skip open" in result.stdout
+    assert "https://github.com/org/repo/pull/1" in result.stdout
+
+
+def test_cleanup_apply_passes_apply_and_force(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_cleanup(_runner, root: Path, apply: bool = False, force: bool = False):
+        calls.append((root, apply, force))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="feature",
+                    action="removed",
+                    reason="pull request is merged",
+                    pr_url=None,
+                    worktree_path=tmp_path / "feature",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cli, "execute_cleanup", fake_execute_cleanup, raising=False)
+
+    result = runner.invoke(cli.app, ["cleanup", "--apply", "--force"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, True, True)]
+    assert "cleanup apply" in result.stdout.lower()
+    assert "removed feature" in result.stdout
 
 
 def test_doctor_reports_failed_checks(monkeypatch, tmp_path: Path) -> None:

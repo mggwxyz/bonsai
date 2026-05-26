@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import shlex
 from collections.abc import Callable, Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
 from bonsai.caddy import caddy_reload_plan
@@ -28,6 +30,8 @@ from bonsai.models import (
     BonsaiConfig,
     BonsaiState,
     CheckoutWorktreePlan,
+    CleanupItem,
+    CleanupPlan,
     CloneWorkspacePlan,
     CommandSpec,
     DoctorCheck,
@@ -56,6 +60,13 @@ from bonsai.state import load_state, remove_worktree, save_state, update_worktre
 from bonsai.templates import render_template
 
 ConfigInitializer = Callable[[Path, str, str, Path], None]
+
+
+@dataclass(frozen=True)
+class _PullRequestInfo:
+    state: str
+    merged_at: str | None
+    url: str | None
 
 
 def workspace_config_path(workspace_root: Path) -> Path:
@@ -244,6 +255,106 @@ def _remove_generated_snippets(
             path.unlink()
             removed.append(path)
     return tuple(removed)
+
+
+def _github_cli_error(message: str) -> BonsaiWorkspaceError:
+    return BonsaiWorkspaceError(f"{message}. Install gh if needed, then run: gh auth login")
+
+
+def _require_github_cli(runner: Runner, repo: Path) -> None:
+    try:
+        version = runner.run(["gh", "--version"], check=False)
+    except FileNotFoundError as exc:
+        raise _github_cli_error("GitHub CLI is required for cleanup") from exc
+    if version.returncode != 0:
+        raise _github_cli_error("GitHub CLI is required for cleanup")
+
+    try:
+        auth = runner.run(["gh", "auth", "status"], cwd=repo, check=False)
+    except FileNotFoundError as exc:
+        raise _github_cli_error("GitHub CLI is required for cleanup") from exc
+    if auth.returncode != 0:
+        raise BonsaiWorkspaceError("GitHub CLI is not authenticated. Run: gh auth login")
+
+
+def _github_prs_for_branch(runner: Runner, repo: Path, branch: str) -> tuple[_PullRequestInfo, ...]:
+    result = runner.run(
+        [
+            "gh",
+            "pr",
+            "list",
+            "--head",
+            branch,
+            "--state",
+            "all",
+            "--json",
+            "state,mergedAt,url",
+            "--limit",
+            "20",
+        ],
+        cwd=repo,
+    )
+    try:
+        raw_items = json.loads(result.stdout or "[]")
+    except json.JSONDecodeError as exc:
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data for branch: {branch}") from exc
+    if not isinstance(raw_items, list):
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data for branch: {branch}")
+
+    pull_requests: list[_PullRequestInfo] = []
+    for raw_item in raw_items:
+        if not isinstance(raw_item, dict):
+            raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data for branch: {branch}")
+        state = raw_item.get("state")
+        merged_at = raw_item.get("mergedAt")
+        url = raw_item.get("url")
+        pull_requests.append(
+            _PullRequestInfo(
+                state=str(state or "").lower(),
+                merged_at=str(merged_at) if merged_at else None,
+                url=str(url) if url else None,
+            )
+        )
+    return tuple(pull_requests)
+
+
+def _pr_cleanup_decision(
+    runner: Runner,
+    default_worktree: Path,
+    branch: str,
+    worktree: ManagedWorktree,
+    workspace_root: Path,
+) -> CleanupItem:
+    worktree_path = workspace_root / worktree.path
+    pull_requests = _github_prs_for_branch(runner, default_worktree, branch)
+    if not pull_requests:
+        return CleanupItem(branch, worktree_path, "skip", "no pull request found")
+
+    open_pr = next(
+        (pull_request for pull_request in pull_requests if pull_request.state == "open"),
+        None,
+    )
+    if open_pr is not None:
+        return CleanupItem(branch, worktree_path, "skip", "pull request is open", open_pr.url)
+
+    merged_pr = next(
+        (
+            pull_request
+            for pull_request in pull_requests
+            if pull_request.merged_at is not None or pull_request.state == "merged"
+        ),
+        None,
+    )
+    if merged_pr is None:
+        pr = pull_requests[0]
+        reason = (
+            "pull request is closed but not merged"
+            if pr.state == "closed"
+            else "pull request is not merged"
+        )
+        return CleanupItem(branch, worktree_path, "skip", reason, pr.url)
+
+    return CleanupItem(branch, worktree_path, "remove", "pull request is merged", merged_pr.url)
 
 
 def _resolve_current_worktree(
@@ -864,3 +975,50 @@ def execute_remove(
         removed_snippets=removed_snippets,
         updated_state=updated_state,
     )
+
+
+def execute_cleanup(
+    runner: Runner,
+    workspace_root: Path,
+    apply: bool = False,
+    force: bool = False,
+) -> CleanupPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    default_worktree = workspace_root / state.default_worktree
+    _require_github_cli(runner, default_worktree)
+
+    items: list[CleanupItem] = []
+    for branch, worktree in sorted(state.worktrees.items(), key=lambda item: item[0].lower()):
+        item = _pr_cleanup_decision(runner, default_worktree, branch, worktree, workspace_root)
+        if item.action != "remove":
+            items.append(item)
+            continue
+
+        if not force and worktree_has_changes(runner, item.worktree_path):
+            items.append(
+                CleanupItem(
+                    branch=item.branch,
+                    worktree_path=item.worktree_path,
+                    action="skip",
+                    reason="worktree has uncommitted changes",
+                    pr_url=item.pr_url,
+                )
+            )
+            continue
+
+        if not apply:
+            items.append(item)
+            continue
+
+        execute_remove(runner, branch, workspace_root, force=force)
+        items.append(
+            CleanupItem(
+                branch=item.branch,
+                worktree_path=item.worktree_path,
+                action="removed",
+                reason=item.reason,
+                pr_url=item.pr_url,
+            )
+        )
+
+    return CleanupPlan(items=tuple(items))

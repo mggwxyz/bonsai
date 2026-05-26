@@ -23,6 +23,7 @@ from bonsai.workflows import (
     check_workspace_health,
     execute_add,
     execute_checkout,
+    execute_cleanup,
     execute_clone,
     execute_remove,
     execute_start,
@@ -401,9 +402,26 @@ def sync(apply: bool = typer.Option(False, "--apply", help="Write regenerated fi
 @app.command()
 def cleanup(
     apply: bool = typer.Option(False, "--apply", help="Remove eligible worktrees."),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Remove eligible worktrees with uncommitted changes.",
+    ),
 ) -> None:
-    mode = "apply" if apply else "dry run"
-    console.print(f"cleanup {mode}")
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_cleanup(SubprocessRunner(), root_path, apply=apply, force=force)
+        mode = "apply" if apply else "dry run"
+        console.print(f"cleanup {mode}")
+        if not plan.items:
+            console.print("No managed worktrees")
+        for item in plan.items:
+            suffix = item.reason
+            if item.pr_url is not None:
+                suffix = f"{suffix} ({item.pr_url})"
+            console.print(f"{item.action} {item.branch} - {suffix}")
+    except BonsaiError as exc:
+        _fail(exc)
 
 
 @app.command()

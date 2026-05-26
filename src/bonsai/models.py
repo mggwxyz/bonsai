@@ -195,6 +195,20 @@ class RemoveWorktreePlan:
 
 
 @dataclass(frozen=True)
+class CleanupItem:
+    branch: str
+    worktree_path: Path
+    action: str
+    reason: str
+    pr_url: str | None = None
+
+
+@dataclass(frozen=True)
+class CleanupPlan:
+    items: tuple[CleanupItem, ...]
+
+
+@dataclass(frozen=True)
 class CheckoutWorktreePlan:
     worktree_path: Path
     created: bool

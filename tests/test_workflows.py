@@ -32,6 +32,7 @@ from bonsai.workflows import (
     command_summary,
     execute_add,
     execute_checkout,
+    execute_cleanup,
     execute_clone,
     execute_remove,
     execute_start,
@@ -2029,6 +2030,234 @@ def test_execute_remove_preserves_state_when_git_remove_fails(tmp_path: Path) ->
 
     assert snippet.exists()
     assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].slot == 1
+
+
+def test_execute_cleanup_requires_authenticated_github_cli(tmp_path: Path) -> None:
+    class UnauthenticatedGhRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=1, stderr="not logged in\n")
+            return CommandResult(returncode=0)
+
+    runner = UnauthenticatedGhRunner()
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="gh auth login"):
+        execute_cleanup(runner, workspace_root)
+
+    assert runner.commands == [
+        CommandSpec(argv=("gh", "--version")),
+        CommandSpec(argv=("gh", "auth", "status"), cwd=workspace_root / "main"),
+    ]
+
+
+def test_execute_cleanup_dry_run_marks_merged_prs_and_skips_others(tmp_path: Path) -> None:
+    class CleanupDryRunRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:4] == ["gh", "pr", "list", "--head"]:
+                branch = argv[4]
+                payload = {
+                    "feature": '[{"state":"MERGED","mergedAt":"2026-05-01T00:00:00Z","url":"https://github.com/org/repo/pull/1"}]',
+                    "open": '[{"state":"OPEN","mergedAt":null,"url":"https://github.com/org/repo/pull/2"}]',
+                    "missing": "[]",
+                }[branch]
+                return CommandResult(returncode=0, stdout=payload)
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = CleanupDryRunRunner()
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    for name in ("feature", "open", "missing"):
+        (workspace_root / name).mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+                "open": ManagedWorktree(path="open", slug="open", slot=2),
+                "missing": ManagedWorktree(path="missing", slug="missing", slot=3),
+            },
+        ),
+    )
+
+    plan = execute_cleanup(runner, workspace_root)
+
+    assert [(item.branch, item.action, item.reason, item.pr_url) for item in plan.items] == [
+        ("feature", "remove", "pull request is merged", "https://github.com/org/repo/pull/1"),
+        ("missing", "skip", "no pull request found", None),
+        ("open", "skip", "pull request is open", "https://github.com/org/repo/pull/2"),
+    ]
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees.keys() == {
+        "feature",
+        "open",
+        "missing",
+    }
+
+
+def test_execute_cleanup_skips_dirty_merged_prs_without_force(tmp_path: Path) -> None:
+    class DirtyCleanupRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0)
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:4] == ["gh", "pr", "list", "--head"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout='[{"state":"MERGED","mergedAt":"2026-05-01T00:00:00Z","url":"https://github.com/org/repo/pull/1"}]',
+                )
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout=" M README.md\n")
+            return CommandResult(returncode=0)
+
+    runner = DirtyCleanupRunner()
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    (workspace_root / "feature").mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = execute_cleanup(runner, workspace_root, apply=True)
+
+    assert [(item.branch, item.action, item.reason) for item in plan.items] == [
+        ("feature", "skip", "worktree has uncommitted changes")
+    ]
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].slot == 1
+    assert all("remove" not in command.argv for command in runner.commands)
+
+
+def test_execute_cleanup_apply_removes_merged_clean_worktrees(tmp_path: Path) -> None:
+    class ApplyCleanupRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0)
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:4] == ["gh", "pr", "list", "--head"]:
+                branch = argv[4]
+                if branch == "feature":
+                    return CommandResult(
+                        returncode=0,
+                        stdout='[{"state":"MERGED","mergedAt":"2026-05-01T00:00:00Z","url":"https://github.com/org/repo/pull/1"}]',
+                    )
+                return CommandResult(
+                    returncode=0,
+                    stdout='[{"state":"OPEN","mergedAt":null,"url":"https://github.com/org/repo/pull/2"}]',
+                )
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = ApplyCleanupRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    open_worktree = workspace_root / "open"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    open_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    snippets = workspace_root / "caddy.d"
+    snippets.mkdir()
+    (snippets / "feature-frontend.caddy").write_text("feature\n", encoding="utf-8")
+    (snippets / "open-frontend.caddy").write_text("open\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+                "open": ManagedWorktree(path="open", slug="open", slot=2),
+            },
+        ),
+    )
+
+    plan = execute_cleanup(runner, workspace_root, apply=True)
+
+    assert [(item.branch, item.action, item.reason) for item in plan.items] == [
+        ("feature", "removed", "pull request is merged"),
+        ("open", "skip", "pull request is open"),
+    ]
+    assert set(load_state(workspace_root / ".bonsai" / "state.json").worktrees) == {"open"}
+    assert not (snippets / "feature-frontend.caddy").exists()
+    assert (snippets / "open-frontend.caddy").exists()
+    assert CommandSpec(
+        argv=("git", "-C", str(default_worktree), "worktree", "remove", str(feature_worktree))
+    ) in runner.commands
 
 
 def test_execute_checkout_resolves_existing_managed_worktree(tmp_path: Path) -> None:
