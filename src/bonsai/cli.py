@@ -1,4 +1,9 @@
+import os
+import shlex
+import shutil
+import subprocess
 import webbrowser
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 
@@ -92,6 +97,38 @@ def root(
 def _fail(error: BonsaiError) -> None:
     console.print(f"[red]Error:[/red] {error}")
     raise typer.Exit(code=1)
+
+
+def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[str]:
+    env = os.environ if environ is None else environ
+    configured = (env.get("VISUAL") or env.get("EDITOR") or "").strip()
+    if configured:
+        try:
+            argv = shlex.split(configured)
+        except ValueError as exc:
+            raise BonsaiWorkspaceError(f"Invalid editor command: {configured}") from exc
+        if argv:
+            return argv
+
+    code = shutil.which("code")
+    if code is not None:
+        return [code]
+
+    raise BonsaiWorkspaceError(
+        "No editor configured. Set VISUAL or EDITOR, or install code on PATH."
+    )
+
+
+def _open_editor(worktree_path: Path) -> None:
+    command = [*_resolve_editor_command(), str(worktree_path)]
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as exc:
+        raise BonsaiWorkspaceError(f"Failed to open editor: {shlex.join(command)}") from exc
+    if result.returncode != 0:
+        raise BonsaiWorkspaceError(
+            f"Editor exited with code {result.returncode}: {shlex.join(command)}"
+        )
 
 
 def _optional_prompt(label: str, default: str | None) -> str | None:

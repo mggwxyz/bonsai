@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 from test_config import VALID_CONFIG, write_config
 from typer.testing import CliRunner
@@ -367,6 +368,81 @@ def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(calls[1][1], FakeRunner)
     assert calls[1][2:] == ("MA-123-test", workspace_root)
     assert "Add workflow ready" not in result.stdout
+
+
+def test_resolve_editor_command_prefers_visual(monkeypatch) -> None:
+    monkeypatch.setenv("VISUAL", "code --reuse-window")
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/local/bin/code")
+
+    assert cli._resolve_editor_command() == ["code", "--reuse-window"]
+
+
+def test_resolve_editor_command_uses_editor_when_visual_is_missing(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/local/bin/code")
+
+    assert cli._resolve_editor_command() == ["vim"]
+
+
+def test_resolve_editor_command_falls_back_to_code(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name: "/usr/local/bin/code" if name == "code" else None,
+    )
+
+    assert cli._resolve_editor_command() == ["/usr/local/bin/code"]
+
+
+def test_resolve_editor_command_fails_when_no_editor_is_available(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="No editor configured"):
+        cli._resolve_editor_command()
+
+
+def test_open_editor_appends_worktree_path(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    worktree_path = tmp_path / "feature"
+
+    monkeypatch.setenv("VISUAL", "code --reuse-window")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    def fake_run(argv, check: bool = False):
+        calls.append((tuple(argv), check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._open_editor(worktree_path)
+
+    assert calls == [
+        (
+            ("code", "--reuse-window", str(worktree_path)),
+            False,
+        )
+    ]
+
+
+def test_open_editor_reports_nonzero_exit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VISUAL", "code")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda _argv, check=False: SimpleNamespace(returncode=2),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Editor exited with code 2"):
+        cli._open_editor(tmp_path / "feature")
 
 
 def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:
