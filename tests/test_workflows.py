@@ -2290,6 +2290,12 @@ def test_execute_cleanup_dry_run_marks_merged_prs_and_skips_others(tmp_path: Pat
     (workspace_root / "main").mkdir(parents=True)
     for name in ("feature", "open", "missing"):
         (workspace_root / name).mkdir()
+    feature_worktree = workspace_root / "feature"
+    (feature_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (feature_worktree / ".env.local").write_text(
+        "COMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
@@ -2318,6 +2324,7 @@ def test_execute_cleanup_dry_run_marks_merged_prs_and_skips_others(tmp_path: Pat
         "open",
         "missing",
     }
+    assert all(command.argv[:2] != ("docker", "compose") for command in runner.commands)
 
 
 def test_execute_cleanup_skips_dirty_merged_prs_without_force(tmp_path: Path) -> None:
@@ -2441,6 +2448,77 @@ def test_execute_cleanup_apply_removes_merged_clean_worktrees(tmp_path: Path) ->
     assert CommandSpec(
         argv=("git", "-C", str(default_worktree), "worktree", "remove", str(feature_worktree))
     ) in runner.commands
+
+
+def test_execute_cleanup_apply_tears_down_compose_through_remove(tmp_path: Path) -> None:
+    class ApplyCleanupRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0)
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:4] == ["gh", "pr", "list", "--head"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout='[{"state":"MERGED","mergedAt":"2026-05-01T00:00:00Z","url":"https://github.com/org/repo/pull/1"}]',
+                )
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = ApplyCleanupRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    (feature_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (feature_worktree / ".env.local").write_text(
+        "COMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = execute_cleanup(runner, workspace_root, apply=True)
+
+    assert [(item.branch, item.action, item.reason) for item in plan.items] == [
+        ("feature", "removed", "pull request is merged")
+    ]
+    docker_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command.argv[:2] == ("docker", "compose")
+    )
+    git_remove_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command.argv[:5] == ("git", "-C", str(default_worktree), "worktree", "remove")
+    )
+    assert runner.commands[docker_index] == CommandSpec(
+        argv=("docker", "compose", "-p", "authentic-feature", "down"),
+        cwd=feature_worktree,
+    )
+    assert docker_index < git_remove_index
 
 
 def test_execute_checkout_resolves_existing_managed_worktree(tmp_path: Path) -> None:
