@@ -192,6 +192,7 @@ class RemoveWorktreePlan:
     worktree_path: Path
     removed_snippets: tuple[Path, ...]
     updated_state: BonsaiState
+    compose_project_name: str | None = None
 
 
 @dataclass(frozen=True)

@@ -1873,6 +1873,171 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
     ]
 
 
+def test_execute_remove_tears_down_compose_before_git_remove(tmp_path: Path) -> None:
+    class CleanRemoveRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = CleanRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (branch_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (branch_worktree / ".env.local").write_text(
+        "COMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = execute_remove(runner, "feature", workspace_root)
+
+    assert plan.compose_project_name == "authentic-feature"
+    assert runner.commands[:3] == [
+        CommandSpec(argv=("git", "-C", str(branch_worktree), "status", "--porcelain")),
+        CommandSpec(
+            argv=("docker", "compose", "-p", "authentic-feature", "down"),
+            cwd=branch_worktree,
+        ),
+        CommandSpec(
+            argv=(
+                "git",
+                "-C",
+                str(default_worktree),
+                "worktree",
+                "remove",
+                str(branch_worktree),
+            )
+        ),
+    ]
+
+
+def test_execute_remove_skips_compose_without_compose_file(tmp_path: Path) -> None:
+    class CleanRemoveRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = CleanRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (branch_worktree / ".env.local").write_text(
+        "COMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = execute_remove(runner, "feature", workspace_root)
+
+    assert plan.compose_project_name is None
+    assert all(command.argv[:2] != ("docker", "compose") for command in runner.commands)
+
+
+def test_execute_remove_blocks_when_compose_teardown_fails(tmp_path: Path) -> None:
+    class FailingComposeRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            if argv[:2] == ["docker", "compose"]:
+                raise BonsaiCommandError("docker compose failed")
+            return CommandResult(returncode=0)
+
+    runner = FailingComposeRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (branch_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    (branch_worktree / ".env.local").write_text(
+        "COMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    snippets = workspace_root / "caddy.d"
+    snippets.mkdir()
+    snippet = snippets / "feature-frontend.caddy"
+    snippet.write_text("feature\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    expected = (
+        "Failed to tear down Docker Compose project "
+        f"authentic-feature at {branch_worktree}"
+    )
+    with pytest.raises(BonsaiWorkspaceError, match=expected):
+        execute_remove(runner, "feature", workspace_root, force=True)
+
+    assert snippet.exists()
+    assert load_state(workspace_root / ".bonsai" / "state.json").worktrees["feature"].slot == 1
+    assert all("remove" not in command.argv for command in runner.commands)
+
+
 def test_execute_remove_refuses_dirty_worktree_without_force(tmp_path: Path) -> None:
     class DirtyRemoveRunner:
         def __init__(self) -> None:
