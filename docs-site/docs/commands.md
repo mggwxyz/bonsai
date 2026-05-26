@@ -32,8 +32,10 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
 * `list`: List managed worktrees in the current...
+* `status`
 * `start`: Run the configured start command in a...
 * `sync`: Compare or repair generated Bonsai files.
+* `repair`
 * `cleanup`: Remove branch worktrees whose pull...
 * `doctor`: Check workspace health and report repair...
 
@@ -220,6 +222,20 @@ $ bonsai list [OPTIONS]
 
 **Options**:
 
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--help`: Show this message and exit.
+
+## `bonsai status`
+
+**Usage**:
+
+```console
+$ bonsai status [OPTIONS]
+```
+
+**Options**:
+
+* `--format TEXT`: Output format: text or json.  [default: text]
 * `--help`: Show this message and exit.
 
 ## `bonsai start`
@@ -253,6 +269,19 @@ $ bonsai sync [OPTIONS]
 **Options**:
 
 * `--apply`: Write regenerated files.
+* `--help`: Show this message and exit.
+
+## `bonsai repair`
+
+**Usage**:
+
+```console
+$ bonsai repair [OPTIONS]
+```
+
+**Options**:
+
+* `--apply`: Write repaired workspace state.
 * `--help`: Show this message and exit.
 
 ## `bonsai cleanup`
