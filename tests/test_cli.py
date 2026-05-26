@@ -396,6 +396,25 @@ def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert "Removed worktree" in result.stdout
 
 
+def test_remove_reports_compose_teardown(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_remove(_runner, name: str, root: Path, force: bool = False):
+        return SimpleNamespace(
+            worktree_path=root / "feature",
+            branch=name,
+            compose_project_name="authentic-feature",
+        )
+
+    monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
+
+    result = runner.invoke(cli.app, ["remove", "feature"])
+
+    assert result.exit_code == 0
+    assert "compose down authentic-feature" in result.stdout
+    assert "Removed worktree" in result.stdout
+
+
 def test_remove_force_passes_force(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)

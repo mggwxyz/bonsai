@@ -150,13 +150,18 @@ the shell integration.
 
 `bonsai remove <worktree>` removes a managed worktree and its directory. Bonsai
 refuses to remove a worktree with uncommitted changes unless you pass `--force`.
+If the worktree has a root-level Compose file, Bonsai first runs
+`docker compose -p <project> down`, using `.env.local` `COMPOSE_PROJECT_NAME`
+when present and the worktree folder name otherwise.
 
 `bonsai cleanup` is PR-aware cleanup for managed branch worktrees. It requires
 the GitHub CLI (`gh`) to be installed and authenticated, checks each managed
 branch for a merged pull request, and is a dry run by default. Use
 `bonsai cleanup --apply` to remove eligible clean worktrees. Branches with no PR,
 open PRs, unmerged closed PRs, or uncommitted changes are skipped; pass
-`--force` with `--apply` to remove eligible dirty worktrees.
+`--force` with `--apply` to remove eligible dirty worktrees. Applied cleanup uses
+the same removal lifecycle as `bonsai remove`, including Docker Compose teardown
+when a removable worktree has a root-level Compose file.
 
 Run `bonsai open` from inside a worktree to open that worktree's primary local
 URL in your default browser.

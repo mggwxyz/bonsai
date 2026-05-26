@@ -268,6 +268,8 @@ def remove_command(
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
+        if getattr(plan, "compose_project_name", None) is not None:
+            console.print(f"compose down {plan.compose_project_name}")
         console.print(f"Removed worktree: {plan.worktree_path}")
     except BonsaiError as exc:
         _fail(exc)

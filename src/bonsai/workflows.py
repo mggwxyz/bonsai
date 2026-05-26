@@ -7,7 +7,9 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from bonsai.caddy import caddy_reload_plan
+from bonsai.compose import detect_compose_project, teardown_compose_project
 from bonsai.config import load_config
+from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.git import (
     add_existing_worktree,
@@ -1050,19 +1052,6 @@ def run_command_specs(runner: Runner, commands: list[CommandSpec]) -> None:
         runner.run(list(command.argv), cwd=command.cwd, env=dict(command.env))
 
 
-def parse_env_content(content: str) -> dict[str, str]:
-    values: dict[str, str] = {}
-    for line in content.splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-        if "=" not in stripped:
-            raise BonsaiWorkspaceError(f"Invalid environment line: {line}")
-        name, value = stripped.split("=", 1)
-        values[name] = value
-    return values
-
-
 def generated_worktree_env(files: tuple[FileWrite, ...]) -> dict[str, str]:
     for file in files:
         if file.path.name == ".env.local":
@@ -1203,6 +1192,10 @@ def execute_remove(
             f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
         )
 
+    compose_project = detect_compose_project(worktree_path)
+    if compose_project is not None:
+        teardown_compose_project(runner, compose_project)
+
     git_remove_worktree(runner, default_worktree, worktree_path, force=force)
     removed_snippets = _remove_generated_snippets(workspace_root, config, resolved.worktree.slug)
     updated_state = remove_worktree(state, resolved.branch)
@@ -1213,6 +1206,7 @@ def execute_remove(
         worktree_path=worktree_path,
         removed_snippets=removed_snippets,
         updated_state=updated_state,
+        compose_project_name=compose_project.project_name if compose_project is not None else None,
     )
 
 
