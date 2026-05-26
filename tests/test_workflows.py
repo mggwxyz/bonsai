@@ -35,6 +35,7 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_remove,
+    execute_repair,
     execute_start,
     execute_sync,
     plan_add_files,
@@ -607,6 +608,81 @@ def test_plan_repair_warns_for_existing_path_that_is_not_git_worktree(
         )
     ]
     assert plan.updated_state.worktrees["suspicious"].slot == 3
+
+
+def test_execute_repair_dry_run_does_not_write_state(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_a = workspace_root / "feature-a"
+    feature_c = workspace_root / "feature-c"
+    default_worktree.mkdir(parents=True)
+    feature_a.mkdir()
+    feature_c.mkdir()
+    state_path = workspace_root / ".bonsai" / "state.json"
+    save_state(
+        state_path,
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+                "old-branch": ManagedWorktree(path="old-branch", slug="old-branch", slot=2),
+                "feature-c": ManagedWorktree(path="feature-c", slug="feature-c", slot=4),
+            },
+        ),
+    )
+
+    plan = execute_repair(
+        SelectiveGitWorktreeRunner({feature_a, feature_c}),
+        workspace_root,
+        apply=False,
+    )
+
+    saved_state = load_state(state_path)
+    assert plan.state_changed is True
+    assert set(saved_state.worktrees) == {"feature-a", "old-branch", "feature-c"}
+    assert saved_state.worktrees["feature-c"].slot == 4
+
+
+def test_execute_repair_apply_writes_repaired_state(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_a = workspace_root / "feature-a"
+    feature_c = workspace_root / "feature-c"
+    default_worktree.mkdir(parents=True)
+    feature_a.mkdir()
+    feature_c.mkdir()
+    state_path = workspace_root / ".bonsai" / "state.json"
+    save_state(
+        state_path,
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+                "old-branch": ManagedWorktree(path="old-branch", slug="old-branch", slot=2),
+                "feature-c": ManagedWorktree(path="feature-c", slug="feature-c", slot=4),
+            },
+        ),
+    )
+
+    plan = execute_repair(
+        SelectiveGitWorktreeRunner({feature_a, feature_c}),
+        workspace_root,
+        apply=True,
+    )
+
+    saved_state = load_state(state_path)
+    assert plan.state_changed is True
+    assert set(saved_state.worktrees) == {"feature-a", "feature-c"}
+    assert saved_state.worktrees["feature-a"].slot == 1
+    assert saved_state.worktrees["feature-c"].slot == 2
 
 
 def test_execute_sync_dry_run_does_not_write_files(tmp_path: Path) -> None:

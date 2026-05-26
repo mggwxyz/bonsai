@@ -431,6 +431,13 @@ def plan_repair(runner: Runner, workspace_root: Path) -> RepairPlan:
     )
 
 
+def execute_repair(runner: Runner, workspace_root: Path, apply: bool = False) -> RepairPlan:
+    plan = plan_repair(runner, workspace_root)
+    if apply and plan.state_changed:
+        save_state(workspace_root / ".bonsai" / "state.json", plan.updated_state)
+    return plan
+
+
 def _resolve_current_worktree(
     state: BonsaiState,
     workspace_root: Path,
