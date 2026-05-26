@@ -1,12 +1,15 @@
 import io
+import os
 import sys
+import threading
+from contextlib import suppress
 from pathlib import Path
 
 from rich.console import Console
 from rich.text import Text
 
 from bonsai.models import CommandSpec
-from bonsai.process import RecordingRunner, SubprocessRunner, format_command
+from bonsai.process import RecordingRunner, Runner, SubprocessRunner, format_command
 
 
 class StatusContext:
@@ -35,6 +38,36 @@ class TerminalStatusConsole:
 
     def print(self, *args: object, **kwargs: object) -> None:
         raise AssertionError("terminal consoles should render subprocess status via status()")
+
+
+class SignalingStream(io.StringIO):
+    def __init__(self) -> None:
+        super().__init__()
+        self.wrote = threading.Event()
+
+    def write(self, value: str) -> int:
+        written = super().write(value)
+        if value:
+            self.wrote.set()
+        return written
+
+
+class FailingStream(io.StringIO):
+    def write(self, value: str) -> int:
+        raise RuntimeError(f"stream failed while writing {value!r}")
+
+
+def process_is_alive(pid: int) -> bool:
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    return True
+
+
+def terminate_process(pid: int) -> None:
+    with suppress(ProcessLookupError):
+        os.kill(pid, 15)
 
 
 def test_format_command_shell_quotes_arguments() -> None:
@@ -125,7 +158,7 @@ def test_subprocess_runner_streams_stdout_and_stderr_to_log_and_stream(
 ) -> None:
     stream = io.StringIO()
     stderr = io.StringIO()
-    console = Console(file=stderr, force_terminal=False, color_system=None)
+    console = Console(file=stderr, force_terminal=False, color_system=None, width=300)
     runner = SubprocessRunner(console=console, stream=stream)
     log_path = tmp_path / "command.log"
 
@@ -136,6 +169,7 @@ def test_subprocess_runner_streams_stdout_and_stderr_to_log_and_stream(
             "-c",
             "import sys; print('out'); print('err', file=sys.stderr)",
         ],
+        cwd=tmp_path,
         log_path=log_path,
         label="install",
     )
@@ -146,6 +180,169 @@ def test_subprocess_runner_streams_stdout_and_stderr_to_log_and_stream(
     assert "out\n" in log_path.read_text(encoding="utf-8")
     assert "err\n" in log_path.read_text(encoding="utf-8")
     assert "Running install:" in stderr.getvalue()
+    assert format_command([sys.executable], cwd=tmp_path).split(" && ")[0] in stderr.getvalue()
+
+
+def test_runner_protocol_includes_logged_stream() -> None:
+    annotations = Runner.run_stream_logged.__annotations__
+
+    assert annotations["argv"] == "list[str]"
+    assert annotations["cwd"] == "Path | None"
+    assert annotations["env"] == "Mapping[str, str] | None"
+    assert annotations["log_path"] == "Path | None"
+    assert annotations["label"] == "str | None"
+    assert annotations["return"] == "int"
+
+
+def test_subprocess_runner_no_log_delegates_to_run_stream(monkeypatch) -> None:
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None)
+    )
+    calls: list[tuple[list[str], Path | None, dict[str, str] | None]] = []
+
+    def fake_run_stream(
+        argv: list[str],
+        cwd: Path | None = None,
+        env: dict[str, str] | None = None,
+    ) -> int:
+        calls.append((argv, cwd, env))
+        return 17
+
+    monkeypatch.setattr(runner, "run_stream", fake_run_stream)
+
+    exit_code = runner.run_stream_logged(
+        ["tool", "arg"],
+        cwd=Path("/tmp/repo"),
+        env={"BONSAI_TEST": "1"},
+        log_path=None,
+        label="ignored",
+    )
+
+    assert exit_code == 17
+    assert calls == [(["tool", "arg"], Path("/tmp/repo"), {"BONSAI_TEST": "1"})]
+
+
+def test_subprocess_runner_logged_stream_creates_nested_log_directories(
+    tmp_path: Path,
+) -> None:
+    stream = io.StringIO()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+    log_path = tmp_path / "nested" / "logs" / "command.log"
+
+    exit_code = runner.run_stream_logged(
+        [sys.executable, "-u", "-c", "print('ok')"],
+        log_path=log_path,
+    )
+
+    assert exit_code == 0
+    assert log_path.read_text(encoding="utf-8") == "ok\n"
+
+
+def test_subprocess_runner_logged_stream_and_log_match_exactly(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+    log_path = tmp_path / "command.log"
+
+    exit_code = runner.run_stream_logged(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "import sys; sys.stdout.write('out\\n'); sys.stderr.write('err\\n')",
+        ],
+        log_path=log_path,
+    )
+
+    assert exit_code == 0
+    assert stream.getvalue() == log_path.read_text(encoding="utf-8") == "out\nerr\n"
+
+
+def test_subprocess_runner_logged_stream_writes_output_before_newline(
+    tmp_path: Path,
+) -> None:
+    stream = SignalingStream()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+    log_path = tmp_path / "command.log"
+    result: list[int] = []
+    script = (
+        "import sys, time; "
+        "sys.stdout.write('partial'); "
+        "sys.stdout.flush(); "
+        "time.sleep(0.8)"
+    )
+
+    def run_command() -> None:
+        result.append(
+            runner.run_stream_logged(
+                [
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    script,
+                ],
+                log_path=log_path,
+            )
+        )
+
+    thread = threading.Thread(target=run_command)
+    thread.start()
+    wrote_before_exit = stream.wrote.wait(timeout=0.2)
+    thread.join(timeout=2)
+
+    assert not thread.is_alive()
+    assert wrote_before_exit
+    assert result == [0]
+    assert stream.getvalue() == log_path.read_text(encoding="utf-8") == "partial"
+
+
+def test_subprocess_runner_logged_stream_terminates_process_when_writes_fail(
+    tmp_path: Path,
+) -> None:
+    pid_path = tmp_path / "child.pid"
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=FailingStream(),
+    )
+    script = (
+        "import os, pathlib, sys, time; "
+        f"pathlib.Path({str(pid_path)!r}).write_text("
+        "str(os.getpid()), encoding='utf-8'"
+        "); "
+        "sys.stdout.write('started\\n'); "
+        "sys.stdout.flush(); "
+        "time.sleep(10)"
+    )
+
+    try:
+        try:
+            runner.run_stream_logged(
+                [
+                    sys.executable,
+                    "-u",
+                    "-c",
+                    script,
+                ],
+                log_path=tmp_path / "command.log",
+            )
+        except RuntimeError as error:
+            assert "stream failed" in str(error)
+        else:
+            raise AssertionError("stream failure should be re-raised")
+
+        pid = int(pid_path.read_text(encoding="utf-8"))
+        assert not process_is_alive(pid)
+    finally:
+        if pid_path.exists():
+            terminate_process(int(pid_path.read_text(encoding="utf-8")))
 
 
 def test_subprocess_runner_logged_stream_merges_env(tmp_path: Path) -> None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import codecs
 import os
 import shlex
 import subprocess
@@ -38,6 +39,16 @@ class Runner(Protocol):
         argv: list[str],
         cwd: Path | None = None,
         env: Mapping[str, str] | None = None,
+    ) -> int:
+        ...
+
+    def run_stream_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path | None = None,
+        label: str | None = None,
     ) -> int:
         ...
 
@@ -122,7 +133,7 @@ class SubprocessRunner:
 
         log_path.parent.mkdir(parents=True, exist_ok=True)
         label_text = f"{label}: " if label else ""
-        self.console.print(f"Running {label_text}{format_command(argv)}")
+        self.console.print(f"Running {label_text}{format_command(argv, cwd=cwd)}")
         with log_path.open("w", encoding="utf-8") as log_file:
             process = subprocess.Popen(
                 argv,
@@ -130,16 +141,40 @@ class SubprocessRunner:
                 env=process_env,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
+                bufsize=0,
             )
-            if process.stdout is not None:
-                for chunk in process.stdout:
-                    self.stream.write(chunk)
-                    self.stream.flush()
-                    log_file.write(chunk)
-                    log_file.flush()
-            return process.wait()
+            decoder = codecs.getincrementaldecoder("utf-8")()
+            try:
+                if process.stdout is not None:
+                    while chunk := process.stdout.read(8192):
+                        text = decoder.decode(chunk)
+                        if text:
+                            self._write_logged_chunk(text, log_file)
+                    tail = decoder.decode(b"", final=True)
+                    if tail:
+                        self._write_logged_chunk(tail, log_file)
+                return process.wait()
+            except BaseException:
+                self._terminate_process(process)
+                raise
+
+    def _write_logged_chunk(self, chunk: str, log_file: TextIO) -> None:
+        self.stream.write(chunk)
+        self.stream.flush()
+        log_file.write(chunk)
+        log_file.flush()
+
+    @staticmethod
+    def _terminate_process(process: subprocess.Popen[bytes]) -> None:
+        if process.poll() is not None:
+            process.wait()
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
 
 
 class RecordingRunner:
