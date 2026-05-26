@@ -44,6 +44,11 @@ def test_next_command_log_path_adds_suffix_on_collision(tmp_path: Path) -> None:
     )
 
 
+def test_next_command_log_path_rejects_unknown_kind(tmp_path: Path) -> None:
+    with pytest.raises(BonsaiWorkspaceError, match="Unsupported log command: build"):
+        next_command_log_path(tmp_path, "feature", "build")
+
+
 def test_latest_command_log_returns_newest_log_for_worktree(tmp_path: Path) -> None:
     log_dir = tmp_path / ".bonsai" / "logs" / "feature-auth"
     log_dir.mkdir(parents=True)
@@ -62,6 +67,17 @@ def test_latest_command_log_filters_by_kind(tmp_path: Path) -> None:
     install = log_dir / "20260526-143012-install.log"
     setup.write_text("setup\n", encoding="utf-8")
     install.write_text("install\n", encoding="utf-8")
+
+    assert latest_command_log(tmp_path, "feature-auth", "install") == install
+
+
+def test_latest_command_log_ignores_malformed_kind_suffix(tmp_path: Path) -> None:
+    log_dir = tmp_path / ".bonsai" / "logs" / "feature-auth"
+    log_dir.mkdir(parents=True)
+    install = log_dir / "20260526-143012-install.log"
+    malformed = log_dir / "20260526-143245-install-debug.log"
+    install.write_text("install\n", encoding="utf-8")
+    malformed.write_text("debug\n", encoding="utf-8")
 
     assert latest_command_log(tmp_path, "feature-auth", "install") == install
 
