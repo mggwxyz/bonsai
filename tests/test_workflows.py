@@ -1,3 +1,4 @@
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -490,6 +491,32 @@ def test_plan_workspace_summary_marks_stale_generated_env(tmp_path: Path) -> Non
     summary = plan_workspace_summary(workspace_root)
 
     assert summary.worktrees[0].env_file_status == "stale"
+
+
+def test_plan_workspace_summary_wraps_unreadable_generated_env(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    env_file_path = default_worktree / ".env.local"
+    env_file_path.write_bytes(b"\xff")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=rf"Unable to read generated env file at {re.escape(str(env_file_path))}",
+    ):
+        plan_workspace_summary(workspace_root)
 
 
 def test_plan_current_worktree_status_resolves_current_worktree(tmp_path: Path) -> None:

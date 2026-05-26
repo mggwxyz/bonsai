@@ -741,7 +741,11 @@ def _env_file_status(config: BonsaiConfig, target: WorktreeTarget) -> str:
     env_file_path = target.worktree_path / ".env.local"
     if not env_file_path.exists():
         return "missing"
-    if env_file_path.read_text(encoding="utf-8") == desired_env:
+    try:
+        current_env = env_file_path.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        raise BonsaiWorkspaceError(f"Unable to read generated env file at {env_file_path}") from exc
+    if current_env == desired_env:
         return "current"
     return "stale"
 
