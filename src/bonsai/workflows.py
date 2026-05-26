@@ -26,6 +26,8 @@ from bonsai.git import (
 )
 from bonsai.git import (
     move_worktree as git_move_worktree,
+)
+from bonsai.git import (
     remove_worktree as git_remove_worktree,
 )
 from bonsai.logs import LogKind, latest_command_log, next_command_log_path
