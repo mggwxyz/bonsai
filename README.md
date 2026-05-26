@@ -110,6 +110,12 @@ bonsai cleanup
 bonsai doctor
 ```
 
+To prepare a branch and immediately open the working context:
+
+```bash
+bonsai add ma-123-implement-auth --editor --open --start
+```
+
 `bonsai clone` discovers the repository default branch and uses that branch name
 for the initial checkout directory.
 
@@ -124,6 +130,13 @@ Bonsai's generated `.env.local` values available in the subprocess environment.
 target worktree. With no branch, it uses the current worktree. The process runs
 in the foreground with values from the generated `.env.local` added to the
 environment.
+
+`bonsai add <branch> --editor --open --start` runs explicit post-add actions
+after the worktree is prepared. `--editor` opens the new worktree using
+`$VISUAL`, `$EDITOR`, or `code`; `--open` opens the branch's primary public URL;
+and `--start` runs the configured start command in the foreground. When multiple
+flags are passed, Bonsai opens the editor, opens the browser, then starts the
+app.
 
 ## Shell Integration
 

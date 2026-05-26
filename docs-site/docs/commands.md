@@ -105,6 +105,9 @@ $ bonsai add [OPTIONS] BRANCH
 
 **Options**:
 
+* `--editor`: Open the prepared worktree in an editor.
+* `--open`: Open the prepared worktree&#x27;s primary local URL.
+* `--start`: Run the configured start command after add.
 * `--help`: Show this message and exit.
 
 ## `bonsai remove`
