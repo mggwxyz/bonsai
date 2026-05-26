@@ -46,6 +46,7 @@ from bonsai.workflows import (
     plan_clone_workspace,
     plan_command_log,
     plan_current_worktree_status,
+    plan_move_worktree,
     plan_open_url,
     plan_open_url_for_worktree,
     plan_repair,
@@ -315,6 +316,106 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
     assert plan.symlinks[0].target == (
         tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots" / ".env"
     )
+
+
+def test_plan_move_worktree_updates_state_path_preserving_slug_and_slot(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    old_worktree = workspace_root / "mb-123-auth"
+    old_worktree.mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "MB-123-auth": ManagedWorktree(
+                path="mb-123-auth",
+                slug="mb-123-auth",
+                slot=4,
+            )
+        },
+    )
+
+    plan = plan_move_worktree(
+        state,
+        workspace_root,
+        "MB-123-auth",
+        "MB-123-auth",
+    )
+
+    assert plan.branch == "MB-123-auth"
+    assert plan.old_worktree_path == old_worktree
+    assert plan.new_worktree_path == workspace_root / "MB-123-auth"
+    moved = plan.updated_state.worktrees["MB-123-auth"]
+    assert moved.path == "MB-123-auth"
+    assert moved.slug == "mb-123-auth"
+    assert moved.slot == 4
+
+
+def test_plan_move_worktree_rejects_default_worktree(tmp_path: Path) -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Cannot move the default worktree"):
+        plan_move_worktree(state, tmp_path / "authentic", "main", "Main")
+
+
+def test_plan_move_worktree_rejects_existing_distinct_target(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    (workspace_root / "taken").mkdir()
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+        plan_move_worktree(state, workspace_root, "feature", "taken")
+
+
+def test_plan_move_worktree_rejects_unsafe_target_folder(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid worktree folder"):
+        plan_move_worktree(state, workspace_root, "feature", "../outside")
+
+
+def test_plan_move_worktree_rejects_same_folder_name(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree already uses folder"):
+        plan_move_worktree(state, workspace_root, "feature", "feature")
 
 
 def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> None:

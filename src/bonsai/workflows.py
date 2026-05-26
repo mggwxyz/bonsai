@@ -45,6 +45,7 @@ from bonsai.models import (
     FileSymlink,
     FileWrite,
     ManagedWorktree,
+    MoveWorktreePlan,
     OpenUrlPlan,
     RemoveWorktreePlan,
     RepairItem,
@@ -250,6 +251,52 @@ def resolve_managed_worktree(state: BonsaiState, name: str) -> ResolvedWorktree 
         if name in {candidate.path, candidate.slug}:
             return ResolvedWorktree(branch=branch, worktree=candidate)
     return None
+
+
+def _paths_refer_to_same_existing_path(left: Path, right: Path) -> bool:
+    try:
+        return left.samefile(right)
+    except OSError:
+        return False
+
+
+def plan_move_worktree(
+    state: BonsaiState,
+    workspace_root: Path,
+    name: str,
+    new_folder: str,
+) -> MoveWorktreePlan:
+    safe_new_folder = _safe_path_segment(new_folder, "worktree folder")
+    default_names = {
+        state.default_branch,
+        state.default_worktree,
+        branch_slug(state.default_branch),
+    }
+    if name in default_names:
+        raise BonsaiWorkspaceError("Cannot move the default worktree")
+
+    resolved = resolve_managed_worktree(state, name)
+    if resolved is None:
+        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
+
+    if resolved.worktree.path == safe_new_folder:
+        raise BonsaiWorkspaceError(f"Worktree already uses folder: {safe_new_folder}")
+
+    old_worktree_path = workspace_root / resolved.worktree.path
+    new_worktree_path = workspace_root / safe_new_folder
+    if new_worktree_path.exists() and not _paths_refer_to_same_existing_path(
+        old_worktree_path,
+        new_worktree_path,
+    ):
+        raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
+
+    updated_worktree = replace(resolved.worktree, path=safe_new_folder)
+    return MoveWorktreePlan(
+        branch=resolved.branch,
+        old_worktree_path=old_worktree_path,
+        new_worktree_path=new_worktree_path,
+        updated_state=update_worktree(state, resolved.branch, updated_worktree),
+    )
 
 
 def _remove_generated_snippets(

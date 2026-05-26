@@ -197,6 +197,14 @@ class RemoveWorktreePlan:
 
 
 @dataclass(frozen=True)
+class MoveWorktreePlan:
+    branch: str
+    old_worktree_path: Path
+    new_worktree_path: Path
+    updated_state: BonsaiState
+
+
+@dataclass(frozen=True)
 class CleanupItem:
     branch: str
     worktree_path: Path
