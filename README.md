@@ -138,7 +138,8 @@ for the initial checkout directory.
 `bonsai init` runs inside an existing checkout. If the checkout already has a
 `.bonsai.toml` and is in the Bonsai layout (`my-app/main`, with the checkout
 directory matching the current branch), Bonsai adopts it as the default
-worktree, writes workspace state beside it, and renders generated files.
+worktree, imports existing sibling git worktrees, writes workspace state beside
+it, and renders generated files.
 Otherwise it runs the guided `.bonsai.toml` setup. When run inside a managed
 Bonsai workspace, it writes the local root config.
 
