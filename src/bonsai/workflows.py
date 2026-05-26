@@ -25,6 +25,7 @@ from bonsai.git import (
     worktree_has_changes,
 )
 from bonsai.git import (
+    move_worktree as git_move_worktree,
     remove_worktree as git_remove_worktree,
 )
 from bonsai.logs import LogKind, latest_command_log, next_command_log_path
@@ -1468,6 +1469,55 @@ def execute_remove(
         updated_state=updated_state,
         compose_project_name=compose_project.project_name if compose_project is not None else None,
     )
+
+
+def _next_move_temp_path(workspace_root: Path, target_name: str) -> Path:
+    base_name = f".bonsai-move-{target_name}"
+    candidate = workspace_root / base_name
+    suffix = 1
+    while candidate.exists():
+        candidate = workspace_root / f"{base_name}-{suffix}"
+        suffix += 1
+    return candidate
+
+
+def _move_git_worktree_path(
+    runner: Runner,
+    default_worktree: Path,
+    workspace_root: Path,
+    plan: MoveWorktreePlan,
+) -> None:
+    if _paths_refer_to_same_existing_path(
+        plan.old_worktree_path,
+        plan.new_worktree_path,
+    ):
+        temp_path = _next_move_temp_path(workspace_root, plan.new_worktree_path.name)
+        git_move_worktree(runner, default_worktree, plan.old_worktree_path, temp_path)
+        git_move_worktree(runner, default_worktree, temp_path, plan.new_worktree_path)
+        return
+
+    git_move_worktree(
+        runner,
+        default_worktree,
+        plan.old_worktree_path,
+        plan.new_worktree_path,
+    )
+
+
+def execute_move(
+    runner: Runner,
+    name: str,
+    new_folder: str,
+    workspace_root: Path,
+) -> MoveWorktreePlan:
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    default_worktree = workspace_root / state.default_worktree
+    plan = plan_move_worktree(state, workspace_root, name, new_folder)
+    _move_git_worktree_path(runner, default_worktree, workspace_root, plan)
+    save_state(state_path, plan.updated_state)
+    execute_sync(runner, workspace_root, apply=True)
+    return plan
 
 
 def execute_cleanup(

@@ -37,6 +37,7 @@ from bonsai.workflows import (
     execute_checkout,
     execute_cleanup,
     execute_clone,
+    execute_move,
     execute_init,
     execute_remove,
     execute_repair,
@@ -2631,6 +2632,164 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     assert runner.commands[-2].cwd == branch_worktree
     assert runner.commands[-1].argv == ("yarn", "setup")
     assert runner.commands[-1].cwd == branch_worktree
+
+
+def test_execute_move_uses_git_move_updates_state_and_syncs_generated_files(
+    tmp_path: Path,
+) -> None:
+    class MovingRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:5] == [
+                "git",
+                "-C",
+                str(default_worktree),
+                "worktree",
+                "move",
+            ]:
+                Path(argv[5]).rename(Path(argv[6]))
+                return CommandResult(returncode=0)
+            return CommandResult(returncode=0)
+
+    runner = MovingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    old_worktree = workspace_root / "mb-123-auth"
+    new_worktree = workspace_root / "MB-123-auth-moved"
+    default_worktree.mkdir(parents=True)
+    old_worktree.mkdir()
+    config_text = VALID_CONFIG.replace(
+        'value = "authentic-${slug}"',
+        'value = "${WORKTREE_PATH}"',
+    )
+    write_config(default_worktree, config_text)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "MB-123-auth": ManagedWorktree(
+                    path="mb-123-auth",
+                    slug="mb-123-auth",
+                    slot=1,
+                )
+            },
+        ),
+    )
+
+    plan = execute_move(runner, "MB-123-auth", "MB-123-auth-moved", workspace_root)
+
+    assert plan.old_worktree_path == old_worktree
+    assert plan.new_worktree_path == new_worktree
+    assert not old_worktree.exists()
+    assert new_worktree.exists()
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "move",
+            str(old_worktree),
+            str(new_worktree),
+        )
+    ) in runner.commands
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    moved = state.worktrees["MB-123-auth"]
+    assert moved.path == "MB-123-auth-moved"
+    assert moved.slug == "mb-123-auth"
+    assert moved.slot == 1
+    assert f"COMPOSE_PROJECT_NAME={new_worktree}" in (
+        new_worktree / ".env.local"
+    ).read_text(encoding="utf-8")
+
+
+def test_execute_move_uses_temporary_path_for_case_only_rename(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    class MovingRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:5] == [
+                "git",
+                "-C",
+                str(default_worktree),
+                "worktree",
+                "move",
+            ]:
+                Path(argv[5]).rename(Path(argv[6]))
+                return CommandResult(returncode=0)
+            return CommandResult(returncode=0)
+
+    runner = MovingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    old_worktree = workspace_root / "mb-123"
+    temp_worktree = workspace_root / ".bonsai-move-MB-123"
+    new_worktree = workspace_root / "MB-123"
+    default_worktree.mkdir(parents=True)
+    old_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"MB-123": ManagedWorktree(path="mb-123", slug="mb-123", slot=1)},
+        ),
+    )
+    monkeypatch.setattr(
+        "bonsai.workflows._paths_refer_to_same_existing_path",
+        lambda left, right: left == old_worktree and right == new_worktree,
+    )
+
+    execute_move(runner, "MB-123", "MB-123", workspace_root)
+
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "move",
+            str(old_worktree),
+            str(temp_worktree),
+        )
+    ) in runner.commands
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "move",
+            str(temp_worktree),
+            str(new_worktree),
+        )
+    ) in runner.commands
+    assert new_worktree.exists()
 
 
 def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(
