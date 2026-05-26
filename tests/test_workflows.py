@@ -45,6 +45,7 @@ from bonsai.workflows import (
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
+    plan_open_url_for_worktree,
     plan_repair,
     plan_sync,
     plan_workspace_summary,
@@ -3115,6 +3116,85 @@ def test_resolve_start_target_includes_default_worktree(tmp_path: Path) -> None:
     assert target.worktree.path == "main"
     assert target.worktree.slot == 0
     assert target.worktree_path == default_worktree
+
+
+def test_plan_open_url_for_worktree_renders_named_managed_worktree_url(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_open_url_for_worktree(workspace_root, "feature")
+
+    assert plan.branch == "feature"
+    assert plan.worktree_path == feature_worktree
+    assert plan.url == "https://feature.authentic.localhost"
+
+
+def test_plan_open_url_still_resolves_current_worktree(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_open_url(workspace_root, feature_worktree)
+
+    assert plan.branch == "feature"
+    assert plan.worktree_path == feature_worktree.resolve()
+    assert plan.url == "https://feature.authentic.localhost"
+
+
+def test_plan_open_url_for_worktree_rejects_unknown_name(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Unknown Bonsai worktree"):
+        plan_open_url_for_worktree(workspace_root, "feature")
 
 
 def test_execute_start_passes_generated_env_to_streamed_command(tmp_path: Path) -> None:

@@ -1,4 +1,9 @@
+import os
+import shlex
+import shutil
+import subprocess
 import webbrowser
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated
 
@@ -11,6 +16,7 @@ from bonsai.agent import render_agent_context, render_agent_guide
 from bonsai.config import load_config
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
+from bonsai.models import OpenUrlPlan
 from bonsai.onboarding import (
     ProjectDefaults,
     StarterConfig,
@@ -34,6 +40,7 @@ from bonsai.workflows import (
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
+    plan_open_url_for_worktree,
     plan_workspace_summary,
     workspace_config_path,
 )
@@ -93,6 +100,50 @@ def root(
 def _fail(error: BonsaiError) -> None:
     console.print(f"[red]Error:[/red] {error}")
     raise typer.Exit(code=1)
+
+
+def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[str]:
+    env = os.environ if environ is None else environ
+    configured = (env.get("VISUAL") or env.get("EDITOR") or "").strip()
+    if configured:
+        try:
+            argv = shlex.split(configured)
+        except ValueError as exc:
+            raise BonsaiWorkspaceError(f"Invalid editor command: {configured}") from exc
+        if argv and argv[0]:
+            return argv
+        raise BonsaiWorkspaceError(f"Invalid editor command: {configured}")
+
+    path = None if environ is None else env.get("PATH", "")
+    code = shutil.which("code", path=path)
+    if code is not None:
+        return [code]
+
+    raise BonsaiWorkspaceError(
+        "No editor configured. Set VISUAL or EDITOR, or install code on PATH."
+    )
+
+
+def _open_editor(worktree_path: Path) -> None:
+    command = [*_resolve_editor_command(), str(worktree_path)]
+    try:
+        result = subprocess.run(command, check=False)
+    except OSError as exc:
+        raise BonsaiWorkspaceError(f"Failed to open editor: {shlex.join(command)}") from exc
+    if result.returncode != 0:
+        raise BonsaiWorkspaceError(
+            f"Editor exited with code {result.returncode}: {shlex.join(command)}"
+        )
+
+
+def _open_url(plan: OpenUrlPlan) -> None:
+    if not webbrowser.open(plan.url):
+        raise BonsaiWorkspaceError(f"Failed to open URL: {plan.url}")
+    console.print(f"Opened {plan.url}")
+
+
+def _open_primary_url(workspace_root: Path, name: str) -> None:
+    _open_url(plan_open_url_for_worktree(workspace_root, name))
 
 
 def _optional_prompt(label: str, default: str | None) -> str | None:
@@ -246,13 +297,37 @@ def init_command(
 
 
 @app.command()
-def add(branch: str) -> None:
+def add(
+    branch: str,
+    editor: Annotated[
+        bool,
+        typer.Option("--editor", help="Open the prepared worktree in an editor."),
+    ] = False,
+    open_url: Annotated[
+        bool,
+        typer.Option("--open", help="Open the prepared worktree's primary local URL."),
+    ] = False,
+    start_app: Annotated[
+        bool,
+        typer.Option("--start", help="Run the configured start command after add."),
+    ] = False,
+) -> None:
     """Prepare a managed worktree for a branch."""
     try:
-        root_path = find_workspace_root(Path.cwd())
+        current_path = Path.cwd()
+        root_path = find_workspace_root(current_path)
         plan = execute_add(SubprocessRunner(), branch, root_path)
         console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print(f"Port slot: {plan.slot}")
+        if editor:
+            _open_editor(plan.worktree_path)
+            console.print(f"Opened editor: {plan.worktree_path}")
+        if open_url:
+            _open_primary_url(root_path, branch)
+        if start_app:
+            console.print(f"Starting {branch}")
+            exit_code = execute_start(SubprocessRunner(), root_path, branch, current_path)
+            raise typer.Exit(code=exit_code)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -306,10 +381,7 @@ def open_command() -> None:
     """Open the current worktree's primary local URL."""
     try:
         root_path = find_workspace_root(Path.cwd())
-        plan = plan_open_url(root_path, Path.cwd())
-        if not webbrowser.open(plan.url):
-            raise BonsaiWorkspaceError(f"Failed to open URL: {plan.url}")
-        console.print(f"Opened {plan.url}")
+        _open_url(plan_open_url(root_path, Path.cwd()))
     except BonsaiError as exc:
         _fail(exc)
 

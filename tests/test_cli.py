@@ -5,6 +5,7 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 from rich.console import Console
 from test_config import VALID_CONFIG, write_config
 from typer.testing import CliRunner
@@ -368,6 +369,277 @@ def test_add_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert isinstance(calls[1][1], FakeRunner)
     assert calls[1][2:] == ("MA-123-test", workspace_root)
     assert "Add workflow ready" not in result.stdout
+
+
+def test_resolve_editor_command_prefers_visual(monkeypatch) -> None:
+    monkeypatch.setenv("VISUAL", "code --reuse-window")
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/local/bin/code")
+
+    assert cli._resolve_editor_command() == ["code", "--reuse-window"]
+
+
+def test_resolve_editor_command_uses_editor_when_visual_is_missing(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.setenv("EDITOR", "vim")
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: "/usr/local/bin/code")
+
+    assert cli._resolve_editor_command() == ["vim"]
+
+
+def test_resolve_editor_command_falls_back_to_code(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(
+        cli.shutil,
+        "which",
+        lambda name, path=None: "/usr/local/bin/code" if name == "code" else None,
+    )
+
+    assert cli._resolve_editor_command() == ["/usr/local/bin/code"]
+
+
+def test_resolve_editor_command_uses_environ_path_for_code_fallback(monkeypatch) -> None:
+    calls = []
+
+    def fake_which(name: str, path: str | None = None) -> str | None:
+        calls.append((name, path))
+        if name == "code" and path == "/custom/bin":
+            return "/custom/bin/code"
+        return None
+
+    monkeypatch.setattr(cli.shutil, "which", fake_which)
+
+    assert cli._resolve_editor_command({"PATH": "/custom/bin"}) == ["/custom/bin/code"]
+    assert calls == [("code", "/custom/bin")]
+
+
+def test_resolve_editor_command_rejects_empty_executable(monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid editor command"):
+        cli._resolve_editor_command({"VISUAL": "''", "PATH": ""})
+
+
+def test_resolve_editor_command_rejects_malformed_command(monkeypatch) -> None:
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid editor command"):
+        cli._resolve_editor_command({"VISUAL": "'code", "PATH": ""})
+
+
+def test_resolve_editor_command_fails_when_no_editor_is_available(monkeypatch) -> None:
+    monkeypatch.delenv("VISUAL", raising=False)
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name, path=None: None)
+
+    with pytest.raises(BonsaiWorkspaceError, match="No editor configured"):
+        cli._resolve_editor_command()
+
+
+def test_open_editor_appends_worktree_path(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    worktree_path = tmp_path / "feature"
+
+    monkeypatch.setenv("VISUAL", "code --reuse-window")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    def fake_run(argv, check: bool = False):
+        calls.append((tuple(argv), check))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+
+    cli._open_editor(worktree_path)
+
+    assert calls == [
+        (
+            ("code", "--reuse-window", str(worktree_path)),
+            False,
+        )
+    ]
+
+
+def test_open_editor_reports_nonzero_exit(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VISUAL", "code")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+    monkeypatch.setattr(
+        cli.subprocess,
+        "run",
+        lambda _argv, check=False: SimpleNamespace(returncode=2),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Editor exited with code 2"):
+        cli._open_editor(tmp_path / "feature")
+
+
+def test_open_editor_reports_os_error(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setenv("VISUAL", "code")
+    monkeypatch.delenv("EDITOR", raising=False)
+    monkeypatch.setattr(cli.shutil, "which", lambda _name: None)
+
+    def fail_run(_argv, check: bool = False):
+        _ = check
+        raise OSError("launch failed")
+
+    monkeypatch.setattr(cli.subprocess, "run", fail_run)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Failed to open editor"):
+        cli._open_editor(tmp_path / "feature")
+
+
+def test_add_editor_flag_opens_prepared_worktree(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: workspace_root)
+    monkeypatch.setattr(
+        cli,
+        "execute_add",
+        lambda _runner, _branch, root: SimpleNamespace(
+            worktree_path=root / "feature",
+            slot=1,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "_open_editor", lambda path: calls.append(("editor", path)))
+
+    result = runner.invoke(cli.app, ["add", "feature", "--editor"])
+
+    assert result.exit_code == 0
+    assert calls == [("editor", workspace_root / "feature")]
+
+
+def test_add_open_flag_opens_named_worktree_url(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: workspace_root)
+    monkeypatch.setattr(
+        cli,
+        "execute_add",
+        lambda _runner, _branch, root: SimpleNamespace(
+            worktree_path=root / "feature",
+            slot=1,
+        ),
+        raising=False,
+    )
+
+    def fake_open_primary_url(root: Path, name: str) -> None:
+        calls.append(("open", root, name))
+
+    monkeypatch.setattr(cli, "_open_primary_url", fake_open_primary_url)
+
+    result = runner.invoke(cli.app, ["add", "feature", "--open"])
+
+    assert result.exit_code == 0
+    assert calls == [("open", workspace_root, "feature")]
+
+
+def test_add_post_actions_run_editor_browser_then_start(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    current_path = tmp_path / "current"
+    calls = []
+    current_path.mkdir()
+
+    class FakeRunner:
+        pass
+
+    def fake_execute_add(runner, branch: str, root: Path):
+        calls.append(("add", isinstance(runner, FakeRunner), branch, root))
+        return SimpleNamespace(worktree_path=root / "feature", slot=1)
+
+    def fake_execute_start(runner, root: Path, branch: str | None, current: Path) -> int:
+        calls.append(("start", isinstance(runner, FakeRunner), root, branch, current))
+        return 7
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: workspace_root)
+    monkeypatch.setattr(cli, "execute_add", fake_execute_add, raising=False)
+    monkeypatch.setattr(cli, "execute_start", fake_execute_start, raising=False)
+    monkeypatch.setattr(cli, "_open_editor", lambda path: calls.append(("editor", path)))
+    monkeypatch.setattr(
+        cli,
+        "_open_primary_url",
+        lambda root, name: calls.append(("open", root, name)),
+    )
+    monkeypatch.chdir(current_path)
+
+    result = runner.invoke(cli.app, ["add", "feature", "--editor", "--open", "--start"])
+
+    assert result.exit_code == 7
+    assert calls == [
+        ("add", True, "feature", workspace_root),
+        ("editor", workspace_root / "feature"),
+        ("open", workspace_root, "feature"),
+        ("start", True, workspace_root, "feature", current_path),
+    ]
+
+
+def test_add_start_flag_exits_with_start_exit_code(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+
+    class FakeRunner:
+        pass
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: workspace_root)
+    monkeypatch.setattr(
+        cli,
+        "execute_add",
+        lambda _runner, _branch, root: SimpleNamespace(
+            worktree_path=root / "feature",
+            slot=1,
+        ),
+        raising=False,
+    )
+    monkeypatch.setattr(cli, "execute_start", lambda _runner, _root, _branch, _current: 9)
+
+    result = runner.invoke(cli.app, ["add", "feature", "--start"])
+
+    assert result.exit_code == 9
+    assert "Starting feature" in result.stdout
+
+
+def test_open_primary_url_uses_named_url_plan(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    workspace_root = tmp_path / "bonsai-authentic"
+
+    def fake_plan_open_url_for_worktree(root: Path, name: str):
+        calls.append(("plan", root, name))
+        return SimpleNamespace(url="https://feature.authentic.localhost")
+
+    monkeypatch.setattr(
+        cli,
+        "plan_open_url_for_worktree",
+        fake_plan_open_url_for_worktree,
+        raising=False,
+    )
+    monkeypatch.setattr(
+        cli.webbrowser,
+        "open",
+        lambda url: calls.append(("browser", url)) or True,
+    )
+
+    cli._open_primary_url(workspace_root, "feature")
+
+    assert calls == [
+        ("plan", workspace_root, "feature"),
+        ("browser", "https://feature.authentic.localhost"),
+    ]
 
 
 def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:

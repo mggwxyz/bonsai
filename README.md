@@ -111,6 +111,12 @@ bonsai cleanup
 bonsai doctor
 ```
 
+To prepare a branch and immediately open the working context:
+
+```bash
+bonsai add ma-123-implement-auth --editor --open --start
+```
+
 `bonsai clone` discovers the repository default branch and uses that branch name
 for the initial checkout directory.
 
@@ -132,6 +138,13 @@ Bonsai does not daemonize, supervise, or automatically restart the process.
 `bonsai logs [branch]` prints the latest managed lifecycle log for a worktree.
 Use `--command install`, `--command setup`, or `--command start` to filter to
 the latest log for a specific command kind.
+
+`bonsai add <branch> --editor --open --start` runs explicit post-add actions
+after the worktree is prepared. `--editor` opens the new worktree using
+`$VISUAL`, `$EDITOR`, or `code`; `--open` opens the branch's primary local URL;
+and `--start` runs the configured start command in the foreground. When multiple
+flags are passed, Bonsai opens the editor, opens the browser, then starts the
+app.
 
 ## Shell Integration
 

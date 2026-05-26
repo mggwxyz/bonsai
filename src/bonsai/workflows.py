@@ -801,11 +801,12 @@ def plan_command_log(
     )
 
 
-def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
-    state = load_state(workspace_root / ".bonsai" / "state.json")
-    config = load_workspace_config(workspace_root, state)
-    branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
-
+def _plan_primary_open_url(
+    config: BonsaiConfig,
+    branch: str,
+    worktree: ManagedWorktree,
+    worktree_path: Path,
+) -> OpenUrlPlan:
     try:
         service = config.primary_service()
     except ValueError as exc:
@@ -823,6 +824,25 @@ def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
         raise BonsaiConfigError(f"Invalid primary URL template: {exc}") from exc
 
     return OpenUrlPlan(branch=branch, worktree_path=worktree_path, url=url)
+
+
+def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
+    return _plan_primary_open_url(config, branch, worktree, worktree_path)
+
+
+def plan_open_url_for_worktree(workspace_root: Path, name: str) -> OpenUrlPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    target = resolve_start_target(workspace_root, name, workspace_root)
+    return _plan_primary_open_url(
+        config,
+        target.branch,
+        target.worktree,
+        target.worktree_path,
+    )
 
 
 def _workspace_summary_commands() -> dict[str, str]:
