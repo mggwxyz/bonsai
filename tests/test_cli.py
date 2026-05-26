@@ -906,6 +906,26 @@ def test_repair_noop_reports_no_state_repairs_needed(monkeypatch, tmp_path: Path
     assert "bonsai sync --apply" not in result.stdout
 
 
+def test_repair_noop_with_state_change_reports_sync_instruction(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_repair(_runner, root: Path, apply: bool = False):
+        assert root == tmp_path
+        assert apply is False
+        return SimpleNamespace(items=[], state_changed=True)
+
+    monkeypatch.setattr(cli, "execute_repair", fake_execute_repair, raising=False)
+
+    result = runner.invoke(cli.app, ["repair"])
+
+    assert result.exit_code == 0
+    assert "No state repairs needed" in result.stdout
+    assert "Run: bonsai sync --apply" in result.stdout
+
+
 def test_cleanup_dry_run_reports_pr_aware_plan(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)

@@ -421,7 +421,6 @@ def repair(
         console.print(f"repair {mode}")
         if not plan.items:
             console.print("No state repairs needed")
-            return
         for item in plan.items:
             action = _repair_action_label(item.action, apply)
             console.print(f"{action} {item.branch} - {item.reason}")
