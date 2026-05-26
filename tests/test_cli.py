@@ -899,6 +899,126 @@ def test_sync_apply_passes_apply_true(monkeypatch, tmp_path: Path) -> None:
     assert "No sync changes" in result.stdout
 
 
+def test_repair_dry_run_reports_planned_actions(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_repair(_runner, root: Path, apply: bool = False):
+        calls.append((root, apply))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="old-branch",
+                    action="remove",
+                    reason=f"missing {tmp_path / 'old-branch'}",
+                    worktree_path=tmp_path / "old-branch",
+                    old_slot=2,
+                    new_slot=None,
+                ),
+                SimpleNamespace(
+                    branch="feature-c",
+                    action="repack",
+                    reason="slot 4 -> 2",
+                    worktree_path=tmp_path / "feature-c",
+                    old_slot=4,
+                    new_slot=2,
+                ),
+            ],
+            state_changed=True,
+        )
+
+    monkeypatch.setattr(cli, "execute_repair", fake_execute_repair, raising=False)
+
+    result = runner.invoke(cli.app, ["repair"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, False)]
+    assert "repair dry run" in result.stdout.lower()
+    assert "remove old-branch" in result.stdout
+    assert "repack feature-c" in result.stdout
+    assert "Run: bonsai sync --apply" in result.stdout
+
+
+def test_repair_apply_passes_apply_true_and_uses_past_tense_actions(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_repair(_runner, root: Path, apply: bool = False):
+        calls.append((root, apply))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="old-branch",
+                    action="remove",
+                    reason=f"missing {tmp_path / 'old-branch'}",
+                    worktree_path=tmp_path / "old-branch",
+                    old_slot=2,
+                    new_slot=None,
+                ),
+                SimpleNamespace(
+                    branch="feature-c",
+                    action="repack",
+                    reason="slot 4 -> 2",
+                    worktree_path=tmp_path / "feature-c",
+                    old_slot=4,
+                    new_slot=2,
+                ),
+            ],
+            state_changed=True,
+        )
+
+    monkeypatch.setattr(cli, "execute_repair", fake_execute_repair, raising=False)
+
+    result = runner.invoke(cli.app, ["repair", "--apply"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, True)]
+    assert "repair apply" in result.stdout.lower()
+    assert "removed old-branch" in result.stdout
+    assert "repacked feature-c" in result.stdout
+    assert "Run: bonsai sync --apply" in result.stdout
+
+
+def test_repair_noop_reports_no_state_repairs_needed(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_repair(_runner, root: Path, apply: bool = False):
+        assert root == tmp_path
+        assert apply is False
+        return SimpleNamespace(items=[], state_changed=False)
+
+    monkeypatch.setattr(cli, "execute_repair", fake_execute_repair, raising=False)
+
+    result = runner.invoke(cli.app, ["repair"])
+
+    assert result.exit_code == 0
+    assert "No state repairs needed" in result.stdout
+    assert "bonsai sync --apply" not in result.stdout
+
+
+def test_repair_noop_with_state_change_reports_sync_instruction(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_repair(_runner, root: Path, apply: bool = False):
+        assert root == tmp_path
+        assert apply is False
+        return SimpleNamespace(items=[], state_changed=True)
+
+    monkeypatch.setattr(cli, "execute_repair", fake_execute_repair, raising=False)
+
+    result = runner.invoke(cli.app, ["repair"])
+
+    assert result.exit_code == 0
+    assert "No state repairs needed" in result.stdout
+    assert "Run: bonsai sync --apply" in result.stdout
+
+
 def test_cleanup_dry_run_reports_pr_aware_plan(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)

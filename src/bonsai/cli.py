@@ -26,6 +26,7 @@ from bonsai.workflows import (
     execute_checkout,
     execute_cleanup,
     execute_clone,
+    execute_repair,
     execute_remove,
     execute_start,
     execute_sync,
@@ -427,6 +428,36 @@ def sync(apply: bool = typer.Option(False, "--apply", help="Write regenerated fi
             console.print("reload Caddy")
         elif not apply and plan.reload_caddy and plan.actions:
             console.print("reload Caddy after apply")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+def _repair_action_label(action: str, apply: bool) -> str:
+    if not apply:
+        return action
+    if action == "remove":
+        return "removed"
+    if action == "repack":
+        return "repacked"
+    return action
+
+
+@app.command()
+def repair(
+    apply: bool = typer.Option(False, "--apply", help="Write repaired workspace state."),
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_repair(SubprocessRunner(), root_path, apply=apply)
+        mode = "apply" if apply else "dry run"
+        console.print(f"repair {mode}")
+        if not plan.items:
+            console.print("No state repairs needed")
+        for item in plan.items:
+            action = _repair_action_label(item.action, apply)
+            console.print(f"{action} {item.branch} - {item.reason}")
+        if plan.state_changed:
+            console.print("Run: bonsai sync --apply")
     except BonsaiError as exc:
         _fail(exc)
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import shlex
 from collections.abc import Callable, Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 from bonsai.caddy import caddy_reload_plan
@@ -40,6 +40,8 @@ from bonsai.models import (
     FileWrite,
     ManagedWorktree,
     OpenUrlPlan,
+    RepairItem,
+    RepairPlan,
     RemoveWorktreePlan,
     ResolvedWorktree,
     SyncFileAction,
@@ -359,6 +361,85 @@ def _pr_cleanup_decision(
         return CleanupItem(branch, worktree_path, "skip", reason, pr.url)
 
     return CleanupItem(branch, worktree_path, "remove", "pull request is merged", merged_pr.url)
+
+
+def _branch_sort_key(item: tuple[str, ManagedWorktree]) -> tuple[str, str]:
+    branch = item[0]
+    return (branch.lower(), branch)
+
+
+def plan_repair(runner: Runner, workspace_root: Path) -> RepairPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    items: list[RepairItem] = []
+    healthy_worktrees: dict[str, ManagedWorktree] = {}
+    warning_worktrees: dict[str, ManagedWorktree] = {}
+    state_changed = False
+
+    for branch, worktree in sorted(state.worktrees.items(), key=_branch_sort_key):
+        worktree_path = workspace_root / worktree.path
+        if not worktree_path.exists():
+            items.append(
+                RepairItem(
+                    branch=branch,
+                    worktree_path=worktree_path,
+                    action="remove",
+                    reason=f"missing {worktree_path}",
+                    old_slot=worktree.slot,
+                    new_slot=None,
+                )
+            )
+            state_changed = True
+            continue
+        if not is_git_worktree(runner, worktree_path):
+            items.append(
+                RepairItem(
+                    branch=branch,
+                    worktree_path=worktree_path,
+                    action="warn",
+                    reason=f"not a git worktree {worktree_path}",
+                    old_slot=worktree.slot,
+                    new_slot=worktree.slot,
+                )
+            )
+            warning_worktrees[branch] = worktree
+            continue
+        healthy_worktrees[branch] = worktree
+
+    repaired_worktrees: dict[str, ManagedWorktree] = dict(warning_worktrees)
+    reserved_slots = {worktree.slot for worktree in warning_worktrees.values()}
+    next_slot = 1
+    for branch, worktree in sorted(healthy_worktrees.items(), key=_branch_sort_key):
+        while next_slot in reserved_slots:
+            next_slot += 1
+        if worktree.slot == next_slot:
+            repaired_worktrees[branch] = worktree
+        else:
+            items.append(
+                RepairItem(
+                    branch=branch,
+                    worktree_path=workspace_root / worktree.path,
+                    action="repack",
+                    reason=f"slot {worktree.slot} -> {next_slot}",
+                    old_slot=worktree.slot,
+                    new_slot=next_slot,
+                )
+            )
+            repaired_worktrees[branch] = replace(worktree, slot=next_slot)
+            state_changed = True
+        next_slot += 1
+
+    return RepairPlan(
+        items=tuple(items),
+        updated_state=replace(state, worktrees=repaired_worktrees),
+        state_changed=state_changed,
+    )
+
+
+def execute_repair(runner: Runner, workspace_root: Path, apply: bool = False) -> RepairPlan:
+    plan = plan_repair(runner, workspace_root)
+    if apply and plan.state_changed:
+        save_state(workspace_root / ".bonsai" / "state.json", plan.updated_state)
+    return plan
 
 
 def _resolve_current_worktree(
