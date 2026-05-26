@@ -143,7 +143,7 @@ class SubprocessRunner:
                 stderr=subprocess.STDOUT,
                 bufsize=0,
             )
-            decoder = codecs.getincrementaldecoder("utf-8")()
+            decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
             try:
                 if process.stdout is not None:
                     while chunk := process.stdout.read(8192):

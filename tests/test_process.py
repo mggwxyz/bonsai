@@ -289,6 +289,28 @@ def test_subprocess_runner_logged_stream_and_log_match_exactly(tmp_path: Path) -
     assert stream.getvalue() == log_path.read_text(encoding="utf-8") == "out\nerr\n"
 
 
+def test_subprocess_runner_logged_stream_replaces_invalid_utf8(tmp_path: Path) -> None:
+    stream = io.StringIO()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+    log_path = tmp_path / "invalid.log"
+
+    exit_code = runner.run_stream_logged(
+        [
+            sys.executable,
+            "-u",
+            "-c",
+            "import sys; sys.stdout.buffer.write(b'\\xff'); sys.stdout.buffer.flush()",
+        ],
+        log_path=log_path,
+    )
+
+    assert exit_code == 0
+    assert stream.getvalue() == log_path.read_text(encoding="utf-8") == "\ufffd"
+
+
 def test_subprocess_runner_logged_stream_writes_output_before_newline(
     tmp_path: Path,
 ) -> None:
@@ -303,7 +325,7 @@ def test_subprocess_runner_logged_stream_writes_output_before_newline(
         "import sys, time; "
         "sys.stdout.write('partial'); "
         "sys.stdout.flush(); "
-        "time.sleep(0.8)"
+        "time.sleep(2)"
     )
 
     def run_command() -> None:
@@ -321,8 +343,8 @@ def test_subprocess_runner_logged_stream_writes_output_before_newline(
 
     thread = threading.Thread(target=run_command)
     thread.start()
-    wrote_before_exit = stream.wrote.wait(timeout=0.2)
-    thread.join(timeout=2)
+    wrote_before_exit = stream.wrote.wait(timeout=1)
+    thread.join(timeout=3)
 
     assert not thread.is_alive()
     assert wrote_before_exit
