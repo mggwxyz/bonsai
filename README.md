@@ -133,7 +133,7 @@ environment.
 
 `bonsai add <branch> --editor --open --start` runs explicit post-add actions
 after the worktree is prepared. `--editor` opens the new worktree using
-`$VISUAL`, `$EDITOR`, or `code`; `--open` opens the branch's primary public URL;
+`$VISUAL`, `$EDITOR`, or `code`; `--open` opens the branch's primary local URL;
 and `--start` runs the configured start command in the foreground. When multiple
 flags are passed, Bonsai opens the editor, opens the browser, then starts the
 app.
