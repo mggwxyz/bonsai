@@ -19,6 +19,7 @@ from bonsai.onboarding import (
 )
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
+from bonsai.status import render_workspace_list, render_workspace_status
 from bonsai.workflows import (
     check_workspace_health,
     execute_add,
@@ -29,12 +30,14 @@ from bonsai.workflows import (
     execute_start,
     execute_sync,
     plan_agent_context,
+    plan_current_worktree_status,
     plan_open_url,
+    plan_workspace_summary,
     workspace_config_path,
 )
 from bonsai.workspace import find_workspace_root
 
-console = Console()
+console = Console(width=200)
 app = typer.Typer(help="Manage git worktree development workspaces.")
 
 ZSH_SHELL_INIT = """bonsai() {
@@ -361,20 +364,36 @@ def install_shell(shell: str) -> None:
 
 
 @app.command("list")
-def list_worktrees() -> None:
+def list_worktrees(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
     """List managed worktrees in the current workspace."""
     try:
         root_path = find_workspace_root(Path.cwd())
-        state = load_state(root_path / ".bonsai" / "state.json")
-        table = Table(title=f"Worktrees for {state.name}")
-        table.add_column("Branch")
-        table.add_column("Path")
-        table.add_column("Slot", justify="right")
-        table.add_column("Kind")
-        table.add_row(state.default_branch, state.default_worktree, "0", "default")
-        for branch, worktree in sorted(state.worktrees.items(), key=lambda item: item[0].lower()):
-            table.add_row(branch, worktree.path, str(worktree.slot), "managed")
-        console.print(table)
+        summary = plan_workspace_summary(root_path)
+        rendered = render_workspace_list(summary, output_format)
+        if isinstance(rendered, str):
+            typer.echo(rendered, nl=False)
+        else:
+            console.print(rendered)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("status")
+def status_command(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        status = plan_current_worktree_status(root_path, Path.cwd())
+        typer.echo(render_workspace_status(status, output_format), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 

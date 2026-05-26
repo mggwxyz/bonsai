@@ -6,6 +6,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 from rich.console import Console
+from test_config import VALID_CONFIG, write_config
 from typer.testing import CliRunner
 
 from bonsai import cli
@@ -60,6 +61,7 @@ def test_help_lists_core_commands() -> None:
     assert "doctor" in result.stdout
     assert "agent-guide" in result.stdout
     assert "context" in result.stdout
+    assert "status" in result.stdout
 
 
 def test_agent_guide_prints_package_level_agent_rules() -> None:
@@ -733,6 +735,7 @@ def test_install_shell_zsh_is_idempotent(monkeypatch, tmp_path: Path) -> None:
 
 def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkeypatch) -> None:
     write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
     monkeypatch.chdir(tmp_path / "main")
 
     result = runner.invoke(cli.app, ["list"])
@@ -744,6 +747,96 @@ def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkey
     assert "ma-123-test" in result.stdout
     assert "default" in result.stdout
     assert "managed" in result.stdout
+    assert "missing" in result.stdout
+    assert "FRONTEND_PORT=4200" in result.stdout
+    assert "FRONTEND_PORT=4201" in result.stdout
+    assert "https://main.authentic.localhost" in result.stdout
+    assert "https://ma-123-test.authentic.localhost" in result.stdout
+
+
+def test_list_command_json_prints_workspace_summary(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["list", "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "bonsai.list.v1"
+    assert payload["workspace"]["name"] == "authentic"
+    assert [worktree["branch"] for worktree in payload["worktrees"]] == [
+        "main",
+        "MA-123-test",
+    ]
+    assert payload["worktrees"][0]["services"][0]["port"] == 4200
+    assert payload["worktrees"][1]["services"][0]["url"] == (
+        "https://ma-123-test.authentic.localhost"
+    )
+    assert payload["commands"]["status"] == "bonsai status"
+
+
+def test_list_command_rejects_unknown_format(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["list", "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "Unsupported format: xml" in result.stdout
+
+
+def test_status_command_prints_current_worktree_status(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["status"])
+
+    assert result.exit_code == 0
+    assert "Bonsai status" in result.stdout
+    assert "Workspace: authentic" in result.stdout
+    assert "Branch: MA-123-test" in result.stdout
+    assert "Kind: managed" in result.stdout
+    assert "Env file:" in result.stdout
+    assert "missing" in result.stdout
+    assert "FRONTEND_PORT=4201" in result.stdout
+    assert "https://ma-123-test.authentic.localhost" in result.stdout
+    assert "List worktrees: bonsai list" in result.stdout
+
+
+def test_status_command_json_prints_current_worktree_status(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["status", "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "bonsai.status.v1"
+    assert payload["workspace"]["name"] == "authentic"
+    assert payload["current"]["branch"] == "MA-123-test"
+    assert payload["current"]["slot"] == 1
+    assert payload["current"]["kind"] == "managed"
+    assert payload["current"]["services"][0]["port_env"] == "FRONTEND_PORT"
+    assert payload["current"]["services"][0]["port"] == 4201
+    assert payload["commands"]["list"] == "bonsai list"
+
+
+def test_status_command_rejects_unknown_format(tmp_path: Path, monkeypatch) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["status", "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "Unsupported format: xml" in result.stdout
 
 
 def test_start_executes_workflow(monkeypatch, tmp_path: Path) -> None:
