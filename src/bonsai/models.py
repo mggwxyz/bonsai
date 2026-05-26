@@ -205,3 +205,31 @@ class OpenUrlPlan:
     branch: str
     worktree_path: Path
     url: str
+
+
+@dataclass(frozen=True)
+class AgentServiceContext:
+    name: str
+    port_env: str
+    port: int
+    public: bool
+    primary: bool
+    url: str | None
+
+
+@dataclass(frozen=True)
+class AgentContext:
+    workspace_name: str
+    workspace_root: Path
+    default_branch: str
+    default_worktree: str
+    config_path: Path
+    branch: str
+    worktree_path: Path
+    slug: str
+    slot: int
+    env_file_path: Path
+    env_file_status: str
+    generated_env: dict[str, str]
+    services: tuple[AgentServiceContext, ...]
+    commands: dict[str, str]

@@ -23,6 +23,8 @@ from bonsai.git import (
 )
 from bonsai.models import (
     AddFilesPlan,
+    AgentContext,
+    AgentServiceContext,
     BonsaiConfig,
     BonsaiState,
     CheckoutWorktreePlan,
@@ -600,6 +602,71 @@ def plan_open_url(workspace_root: Path, current_path: Path) -> OpenUrlPlan:
         raise BonsaiConfigError(f"Invalid primary URL template: {exc}") from exc
 
     return OpenUrlPlan(branch=branch, worktree_path=worktree_path, url=url)
+
+
+def plan_agent_context(workspace_root: Path, current_path: Path) -> AgentContext:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
+    desired_env = render_env_local(config, branch, worktree.slot, worktree_path)
+    env_file_path = worktree_path / ".env.local"
+    if not env_file_path.exists():
+        env_file_status = "missing"
+    elif env_file_path.read_text(encoding="utf-8") == desired_env:
+        env_file_status = "current"
+    else:
+        env_file_status = "stale"
+
+    values = template_values(config, branch, worktree.slot, worktree_path)
+    services: list[AgentServiceContext] = []
+    for service in config.services:
+        url = None
+        if service.url is not None:
+            try:
+                url = render_template(service.url, values)
+            except KeyError as exc:
+                key = exc.args[0]
+                raise BonsaiConfigError(
+                    f"Service {service.name} URL uses unknown template key: {key}"
+                ) from exc
+            except ValueError as exc:
+                raise BonsaiConfigError(
+                    f"Invalid service {service.name} URL template: {exc}"
+                ) from exc
+        services.append(
+            AgentServiceContext(
+                name=service.name,
+                port_env=service.port_env,
+                port=int(values[service.port_env]),
+                public=service.public,
+                primary=service.primary,
+                url=url,
+            )
+        )
+
+    return AgentContext(
+        workspace_name=state.name,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
+        default_worktree=state.default_worktree,
+        config_path=config.path
+        or resolve_workspace_config_path(workspace_root, state.default_worktree),
+        branch=branch,
+        worktree_path=worktree_path,
+        slug=worktree.slug,
+        slot=worktree.slot,
+        env_file_path=env_file_path,
+        env_file_status=env_file_status,
+        generated_env=parse_env_content(desired_env),
+        services=tuple(services),
+        commands={
+            "context": "bonsai context --format json",
+            "start": "bonsai start",
+            "open": "bonsai open",
+            "sync": "bonsai sync --apply",
+            "doctor": "bonsai doctor",
+        },
+    )
 
 
 def write_files(files: tuple[FileWrite, ...]) -> None:

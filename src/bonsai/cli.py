@@ -7,6 +7,7 @@ from rich.console import Console
 from rich.table import Table
 
 from bonsai import __version__
+from bonsai.agent import render_agent_context, render_agent_guide
 from bonsai.config import load_config
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
@@ -26,6 +27,7 @@ from bonsai.workflows import (
     execute_remove,
     execute_start,
     execute_sync,
+    plan_agent_context,
     plan_open_url,
     workspace_config_path,
 )
@@ -183,6 +185,19 @@ def clone(
         _fail(exc)
 
 
+@app.command("agent-guide")
+def agent_guide(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    try:
+        typer.echo(render_agent_guide(output_format), nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command("init")
 def init_command(
     force: Annotated[
@@ -280,6 +295,21 @@ def open_command() -> None:
         if not webbrowser.open(plan.url):
             raise BonsaiWorkspaceError(f"Failed to open URL: {plan.url}")
         console.print(f"Opened {plan.url}")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("context")
+def context_command(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        context = plan_agent_context(root_path, Path.cwd())
+        typer.echo(render_agent_context(context, output_format), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
