@@ -66,6 +66,17 @@ def test_latest_command_log_filters_by_kind(tmp_path: Path) -> None:
     assert latest_command_log(tmp_path, "feature-auth", "install") == install
 
 
+def test_latest_command_log_orders_suffixed_collision_logs(tmp_path: Path) -> None:
+    log_dir = tmp_path / ".bonsai" / "logs" / "feature-auth"
+    log_dir.mkdir(parents=True)
+    first = log_dir / "20260526-143012-install.log"
+    second = log_dir / "20260526-143012-install-2.log"
+    first.write_text("first\n", encoding="utf-8")
+    second.write_text("second\n", encoding="utf-8")
+
+    assert latest_command_log(tmp_path, "feature-auth", "install") == second
+
+
 def test_latest_command_log_fails_when_no_matching_log_exists(tmp_path: Path) -> None:
     with pytest.raises(BonsaiWorkspaceError, match="No logs found for feature-auth"):
         latest_command_log(tmp_path, "feature-auth", "start")

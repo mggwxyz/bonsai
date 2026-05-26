@@ -50,17 +50,33 @@ def latest_command_log(
     kind = validate_log_kind(kind)
     log_dir = command_log_dir(workspace_root, worktree_slug)
     if kind is None:
-        matches = sorted(path for path in log_dir.glob("*.log") if path.is_file())
+        matches = sorted(
+            (path for path in log_dir.glob("*.log") if path.is_file()),
+            key=_command_log_sort_key,
+        )
     else:
         matches = sorted(
-            path
-            for path in log_dir.glob(f"*-{kind}*.log")
-            if path.is_file() and _matches_kind(path, kind)
+            (
+                path
+                for path in log_dir.glob(f"*-{kind}*.log")
+                if path.is_file() and _matches_kind(path, kind)
+            ),
+            key=_command_log_sort_key,
         )
     if not matches:
         filter_text = f" with command {kind}" if kind is not None else ""
         raise BonsaiWorkspaceError(f"No logs found for {worktree_slug}{filter_text}")
     return matches[-1]
+
+
+def _command_log_sort_key(path: Path) -> tuple[str, str, int, str]:
+    timestamp, kind_and_suffix = path.stem[:15], path.stem[16:]
+    kind, suffix = kind_and_suffix, 1
+    if "-" in kind_and_suffix:
+        possible_kind, possible_suffix = kind_and_suffix.rsplit("-", maxsplit=1)
+        if possible_suffix.isdigit():
+            kind, suffix = possible_kind, int(possible_suffix)
+    return timestamp, kind, suffix, path.name
 
 
 def _matches_kind(path: Path, kind: str) -> bool:
