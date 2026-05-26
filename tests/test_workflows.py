@@ -1216,6 +1216,54 @@ def test_lifecycle_command_failure_includes_log_path(tmp_path: Path) -> None:
         )
 
 
+def test_lifecycle_command_uses_kind_as_stream_label(tmp_path: Path) -> None:
+    class LabelRecordingRunner(RecordingRunner):
+        def __init__(self) -> None:
+            super().__init__()
+            self.labels: list[str | None] = []
+
+        def run_stream_logged(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            env=None,
+            log_path: Path | None = None,
+            label: str | None = None,
+        ) -> int:
+            self.labels.append(label)
+            return super().run_stream_logged(
+                argv,
+                cwd=cwd,
+                env=env,
+                log_path=log_path,
+                label=label,
+            )
+
+    runner = LabelRecordingRunner()
+
+    run_lifecycle_command(
+        runner,
+        workspace_root=tmp_path / "authentic",
+        worktree_slug="feature",
+        kind="install",
+        command="yarn install",
+        cwd=tmp_path / "authentic" / "feature",
+        env={},
+    )
+
+    run_lifecycle_command(
+        runner,
+        workspace_root=tmp_path / "authentic",
+        worktree_slug="feature",
+        kind="setup",
+        command="yarn setup",
+        cwd=tmp_path / "authentic" / "feature",
+        env={},
+    )
+
+    assert runner.labels == ["install", "setup"]
+
+
 def test_execute_clone_rejects_unsafe_name_before_git_commands(tmp_path: Path) -> None:
     class CloneRunner:
         def __init__(self) -> None:
@@ -1351,6 +1399,62 @@ def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
     assert setup_env["FRONTEND_PORT"] == "4200"
     assert setup_env["API_PORT"] == "3333"
     assert setup_env["DB_PORT"] == "5555"
+
+
+def test_execute_clone_logs_default_branch_with_slash_under_slugged_directory(
+    tmp_path: Path,
+) -> None:
+    class SlashDefaultBranchCloneRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:3] == ["git", "ls-remote", "--symref"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="ref: refs/heads/release/2026\tHEAD\n",
+                )
+            if argv[:3] == ["git", "clone", "--branch"]:
+                Path(argv[-1]).mkdir(parents=True)
+                return CommandResult(returncode=0)
+            return CommandResult(returncode=0)
+
+    def initializer(
+        config_path: Path,
+        _workspace_name: str,
+        _default_branch: str,
+        _default_worktree: Path,
+    ) -> None:
+        config_path.write_text(VALID_CONFIG, encoding="utf-8")
+
+    runner = SlashDefaultBranchCloneRunner()
+
+    execute_clone(
+        runner,
+        "git@github.com:org/authentic.git",
+        "authentic",
+        tmp_path,
+        config_initializer=initializer,
+    )
+
+    workspace_root = tmp_path / "authentic"
+    expected_log_dir = workspace_root / ".bonsai" / "logs" / "release-2026"
+    nested_log_dir = workspace_root / ".bonsai" / "logs" / "release" / "2026"
+    install_command = runner.commands[-2]
+    setup_command = runner.commands[-1]
+    assert install_command.log_path is not None
+    assert install_command.log_path.parent == expected_log_dir
+    assert install_command.log_path.parent != nested_log_dir
+    assert install_command.log_path.name.endswith("-install.log")
+    assert setup_command.log_path is not None
+    assert setup_command.log_path.parent == expected_log_dir
+    assert setup_command.log_path.parent != nested_log_dir
+    assert setup_command.log_path.name.endswith("-setup.log")
 
 
 def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Path) -> None:

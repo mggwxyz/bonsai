@@ -897,11 +897,12 @@ def execute_clone(
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
     command_env = generated_worktree_env(plan.files)
+    default_worktree_slug = branch_slug(plan.state.default_branch)
     if config.commands.install:
         run_lifecycle_command(
             runner,
             workspace_root=plan.workspace_root,
-            worktree_slug=plan.state.default_worktree,
+            worktree_slug=default_worktree_slug,
             kind="install",
             command=config.commands.install,
             cwd=plan.default_worktree,
@@ -911,7 +912,7 @@ def execute_clone(
         run_lifecycle_command(
             runner,
             workspace_root=plan.workspace_root,
-            worktree_slug=plan.state.default_worktree,
+            worktree_slug=default_worktree_slug,
             kind="setup",
             command=config.commands.setup,
             cwd=plan.default_worktree,
