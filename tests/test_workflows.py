@@ -404,8 +404,12 @@ def test_plan_move_worktree_rejects_managed_path_collision_with_missing_director
         },
     )
 
-    assert not (workspace_root / "taken").exists()
-    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+    target = workspace_root / "taken"
+    assert not target.exists()
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=re.escape(f"Worktree target already exists: {target}"),
+    ):
         plan_move_worktree(state, workspace_root, "feature", "taken")
 
 
@@ -461,6 +465,30 @@ def test_plan_move_worktree_rejects_samefile_alias_target(tmp_path: Path) -> Non
     assert alias.samefile(feature)
     with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
         plan_move_worktree(state, workspace_root, "feature", "alias")
+
+
+def test_plan_move_worktree_rejects_dangling_symlink_target(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    feature = workspace_root / "feature"
+    dangling = workspace_root / "dangling"
+    feature.mkdir(parents=True)
+    dangling.symlink_to("missing-target", target_is_directory=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+
+    assert not dangling.exists()
+    assert dangling.is_symlink()
+    with pytest.raises(
+        BonsaiWorkspaceError,
+        match=re.escape(f"Worktree target already exists: {dangling}"),
+    ):
+        plan_move_worktree(state, workspace_root, "feature", "dangling")
 
 
 def test_plan_move_worktree_rejects_case_only_samefile_symlink_target(
