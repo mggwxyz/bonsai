@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import codecs
+import errno
 import os
 import shlex
 import subprocess
@@ -135,34 +136,96 @@ class SubprocessRunner:
         label_text = f"{label}: " if label else ""
         self.console.print(Text(f"Running {label_text}{format_command(argv, cwd=cwd)}"))
         with log_path.open("w", encoding="utf-8") as log_file:
+            if self._stream_is_terminal():
+                return self._run_stream_logged_pty(argv, cwd, process_env, log_file)
+            return self._run_stream_logged_pipe(argv, cwd, process_env, log_file)
+
+    def _run_stream_logged_pipe(
+        self,
+        argv: list[str],
+        cwd: Path | None,
+        env: Mapping[str, str] | None,
+        log_file: TextIO,
+    ) -> int:
+        process = subprocess.Popen(
+            argv,
+            cwd=cwd,
+            env=env,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            bufsize=0,
+        )
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
+        try:
+            if process.stdout is not None:
+                while chunk := process.stdout.read(8192):
+                    text = decoder.decode(chunk)
+                    if text:
+                        self._write_logged_chunk(text, log_file)
+                tail = decoder.decode(b"", final=True)
+                if tail:
+                    self._write_logged_chunk(tail, log_file)
+            return process.wait()
+        except BaseException:
+            self._terminate_process(process)
+            raise
+
+    def _run_stream_logged_pty(
+        self,
+        argv: list[str],
+        cwd: Path | None,
+        env: Mapping[str, str] | None,
+        log_file: TextIO,
+    ) -> int:
+        master_fd, slave_fd = os.openpty()
+        process: subprocess.Popen[bytes] | None = None
+        slave_closed = False
+        try:
             process = subprocess.Popen(
                 argv,
                 cwd=cwd,
-                env=process_env,
-                stdout=subprocess.PIPE,
+                env=env,
+                stdout=slave_fd,
                 stderr=subprocess.STDOUT,
-                bufsize=0,
+                close_fds=True,
             )
+            os.close(slave_fd)
+            slave_closed = True
             decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
-            try:
-                if process.stdout is not None:
-                    while chunk := process.stdout.read(8192):
-                        text = decoder.decode(chunk)
-                        if text:
-                            self._write_logged_chunk(text, log_file)
-                    tail = decoder.decode(b"", final=True)
-                    if tail:
-                        self._write_logged_chunk(tail, log_file)
-                return process.wait()
-            except BaseException:
+            while True:
+                try:
+                    chunk = os.read(master_fd, 8192)
+                except OSError as error:
+                    if error.errno == errno.EIO:
+                        break
+                    raise
+                if not chunk:
+                    break
+                text = decoder.decode(chunk)
+                if text:
+                    self._write_logged_chunk(text, log_file)
+            tail = decoder.decode(b"", final=True)
+            if tail:
+                self._write_logged_chunk(tail, log_file)
+            return process.wait()
+        except BaseException:
+            if process is not None:
                 self._terminate_process(process)
-                raise
+            raise
+        finally:
+            if not slave_closed:
+                os.close(slave_fd)
+            os.close(master_fd)
 
     def _write_logged_chunk(self, chunk: str, log_file: TextIO) -> None:
         self.stream.write(chunk)
         self.stream.flush()
         log_file.write(chunk)
         log_file.flush()
+
+    def _stream_is_terminal(self) -> bool:
+        isatty = getattr(self.stream, "isatty", None)
+        return callable(isatty) and isatty() and hasattr(os, "openpty")
 
     @staticmethod
     def _terminate_process(process: subprocess.Popen[bytes]) -> None:

@@ -52,6 +52,11 @@ class SignalingStream(io.StringIO):
         return written
 
 
+class TerminalStream(io.StringIO):
+    def isatty(self) -> bool:
+        return True
+
+
 class FailingStream(io.StringIO):
     def write(self, value: str) -> int:
         raise RuntimeError(f"stream failed while writing {value!r}")
@@ -287,6 +292,26 @@ def test_subprocess_runner_logged_stream_and_log_match_exactly(tmp_path: Path) -
 
     assert exit_code == 0
     assert stream.getvalue() == log_path.read_text(encoding="utf-8") == "out\nerr\n"
+
+
+def test_subprocess_runner_logged_stream_uses_terminal_when_stream_is_terminal(
+    tmp_path: Path,
+) -> None:
+    stream = TerminalStream()
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None),
+        stream=stream,
+    )
+    log_path = tmp_path / "tty.log"
+
+    exit_code = runner.run_stream_logged(
+        [sys.executable, "-u", "-c", "import sys; print(sys.stdout.isatty())"],
+        log_path=log_path,
+    )
+
+    assert exit_code == 0
+    assert "True" in stream.getvalue()
+    assert "True" in log_path.read_text(encoding="utf-8")
 
 
 def test_subprocess_runner_logged_stream_replaces_invalid_utf8(tmp_path: Path) -> None:
