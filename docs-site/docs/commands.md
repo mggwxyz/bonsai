@@ -38,6 +38,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `logs`
 * `sync`: Compare or repair generated Bonsai files.
 * `repair`
+* `repair-ports`: Preview slot reassignments for worktrees...
 * `cleanup`: Remove branch worktrees whose pull...
 * `doctor`: Check workspace health and report repair...
 
@@ -149,10 +150,6 @@ $ bonsai move [OPTIONS] NAME NEW_FOLDER
 **Options**:
 
 * `--help`: Show this message and exit.
-
-The worktree argument accepts a branch name, worktree directory, or worktree
-slug. Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and
-refreshes generated files. The default worktree cannot be moved.
 
 ## `bonsai checkout`
 
@@ -329,6 +326,21 @@ $ bonsai repair [OPTIONS]
 * `--apply`: Write repaired workspace state.
 * `--help`: Show this message and exit.
 
+## `bonsai repair-ports`
+
+Preview slot reassignments for worktrees with busy ports.
+
+**Usage**:
+
+```console
+$ bonsai repair-ports [OPTIONS]
+```
+
+**Options**:
+
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--help`: Show this message and exit.
+
 ## `bonsai cleanup`
 
 Remove branch worktrees whose pull requests were merged.
@@ -357,4 +369,6 @@ $ bonsai doctor [OPTIONS]
 
 **Options**:
 
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--apply`: Apply safe workspace repairs.
 * `--help`: Show this message and exit.

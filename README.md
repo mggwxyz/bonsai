@@ -128,8 +128,12 @@ bonsai status --format json
 bonsai sync
 bonsai repair
 bonsai repair --apply
+bonsai repair-ports
+bonsai repair-ports --format json
 bonsai cleanup
 bonsai doctor
+bonsai doctor --format json
+bonsai doctor --apply
 ```
 
 To prepare a branch and immediately open the working context, pass explicit
@@ -270,7 +274,15 @@ reported as warnings and left in state. Use `bonsai repair --apply` to write
 state, then run `bonsai sync --apply` to refresh generated `.env.local` and
 Caddy files.
 
+`bonsai repair-ports` previews slot changes for branch worktrees whose configured
+service ports are already in use. It reserves the default worktree slot and
+existing non-conflicted branch slots, then proposes the lowest conflict-free slot
+for each affected branch. It does not write state or generated files; use
+`bonsai repair-ports --format json` for machine-readable plans.
+
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
-Caddy files, Caddy availability, and configured service port conflicts.
-Generated-file failures point to `bonsai sync --apply`; structural state drift
-can be previewed with `bonsai repair`.
+Caddy files, Caddy availability, and configured service port conflicts. Use
+`bonsai doctor --format json` for machine-readable checks and
+`bonsai doctor --apply` to run safe workspace repairs: state repair, generated
+file sync, and configured Caddy bootstrap when possible. Structural state drift
+can still be previewed with `bonsai repair`.

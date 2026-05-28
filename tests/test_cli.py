@@ -66,6 +66,7 @@ def test_help_lists_core_commands() -> None:
     assert "logs" in result.stdout
     assert "status" in result.stdout
     assert "repair" in result.stdout
+    assert "repair-ports" in result.stdout
 
     repair_help = runner.invoke(cli.app, ["repair", "--help"])
     assert repair_help.exit_code == 0
@@ -1480,6 +1481,112 @@ def test_repair_noop_with_state_change_reports_sync_instruction(
     assert "Run: bonsai sync --apply" in result.stdout
 
 
+def test_repair_ports_previews_reassignment_plan(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_plan_port_repairs(root: Path):
+        assert root == tmp_path
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="feature-a",
+                    slug="feature-a",
+                    current_slot=1,
+                    proposed_slot=5,
+                    services=[
+                        SimpleNamespace(
+                            name="frontend",
+                            port_env="FRONTEND_PORT",
+                            old_port=4201,
+                            new_port=4205,
+                        ),
+                        SimpleNamespace(
+                            name="api",
+                            port_env="API_PORT",
+                            old_port=3334,
+                            new_port=3338,
+                        ),
+                    ],
+                )
+            ]
+        )
+
+    monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)
+
+    result = runner.invoke(cli.app, ["repair-ports"])
+
+    assert result.exit_code == 0
+    assert "repair-ports dry run" in result.stdout.lower()
+    assert "feature-a slot 1 -> 5" in result.stdout
+    assert "FRONTEND_PORT 4201 -> 4205" in result.stdout
+    assert "API_PORT 3334 -> 3338" in result.stdout
+    assert "No files changed" in result.stdout
+
+
+def test_repair_ports_json_prints_machine_readable_plan(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_plan_port_repairs(root: Path):
+        assert root == tmp_path
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="feature-a",
+                    slug="feature-a",
+                    current_slot=1,
+                    proposed_slot=5,
+                    services=[
+                        SimpleNamespace(
+                            name="frontend",
+                            port_env="FRONTEND_PORT",
+                            old_port=4201,
+                            new_port=4205,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)
+
+    result = runner.invoke(cli.app, ["repair-ports", "--format", "json"])
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload == {
+        "schema": "bonsai.port-repair.v1",
+        "workspace": {"root": str(tmp_path)},
+        "repairs": [
+            {
+                "branch": "feature-a",
+                "slug": "feature-a",
+                "current_slot": 1,
+                "proposed_slot": 5,
+                "services": [
+                    {
+                        "name": "frontend",
+                        "port_env": "FRONTEND_PORT",
+                        "old_port": 4201,
+                        "new_port": 4205,
+                    }
+                ],
+            }
+        ],
+    }
+
+
+def test_repair_ports_rejects_unknown_format(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    result = runner.invoke(cli.app, ["repair-ports", "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "Unsupported format: xml" in result.stdout
+
+
 def test_cleanup_dry_run_reports_pr_aware_plan(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
@@ -1570,6 +1677,95 @@ def test_doctor_reports_failed_checks(monkeypatch, tmp_path: Path) -> None:
     assert "env main" in result.stdout
     assert "Missing .env.local" in result.stdout
     assert "bonsai sync --apply" in result.stdout
+
+
+def test_doctor_json_prints_machine_readable_report(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_check_workspace_health(_runner, root: Path):
+        assert root == tmp_path
+        return SimpleNamespace(
+            failed=True,
+            checks=[
+                SimpleNamespace(
+                    id="env-main",
+                    name="env main",
+                    status="fail",
+                    detail="Missing .env.local",
+                    hint="Run: bonsai sync --apply",
+                    repair="sync",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(cli, "check_workspace_health", fake_check_workspace_health, raising=False)
+
+    result = runner.invoke(cli.app, ["doctor", "--format", "json"])
+
+    assert result.exit_code == 1
+    payload = json.loads(result.stdout)
+    assert payload["schema"] == "bonsai.doctor.v1"
+    assert payload["workspace"]["root"] == str(tmp_path)
+    assert payload["failed"] is True
+    assert payload["checks"] == [
+        {
+            "id": "env-main",
+            "name": "env main",
+            "status": "fail",
+            "detail": "Missing .env.local",
+            "hint": "Run: bonsai sync --apply",
+            "repair": "sync",
+        }
+    ]
+    assert payload["applied"] == []
+
+
+def test_doctor_rejects_unknown_format(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    result = runner.invoke(cli.app, ["doctor", "--format", "xml"])
+
+    assert result.exit_code == 1
+    assert "Unsupported format: xml" in result.stdout
+
+
+def test_doctor_apply_runs_apply_workflow_before_final_health(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_doctor_apply(_runner, root: Path):
+        calls.append(("apply", root))
+        return SimpleNamespace(
+            actions=[
+                SimpleNamespace(kind="repair", detail="removed old-branch"),
+                SimpleNamespace(kind="sync", detail=f"write {tmp_path / 'main' / '.env.local'}"),
+                SimpleNamespace(kind="caddy", detail="brew services start caddy"),
+            ]
+        )
+
+    def fake_check_workspace_health(_runner, root: Path):
+        calls.append(("health", root))
+        return SimpleNamespace(
+            failed=False,
+            checks=[SimpleNamespace(name="config", status="ok", detail="loaded", hint=None)],
+        )
+
+    monkeypatch.setattr(cli, "execute_doctor_apply", fake_execute_doctor_apply, raising=False)
+    monkeypatch.setattr(cli, "check_workspace_health", fake_check_workspace_health, raising=False)
+
+    result = runner.invoke(cli.app, ["doctor", "--apply"])
+
+    assert result.exit_code == 0
+    assert calls == [("apply", tmp_path), ("health", tmp_path)]
+    assert "doctor apply" in result.stdout.lower()
+    assert "repair removed old-branch" in result.stdout
+    assert "sync write" in result.stdout
+    assert "caddy brew services start caddy" in result.stdout
+    assert "config" in result.stdout
+    assert "loaded" in result.stdout
 
 
 def test_doctor_exits_zero_when_checks_pass(monkeypatch, tmp_path: Path) -> None:

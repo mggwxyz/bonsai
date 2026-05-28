@@ -14,6 +14,7 @@ from rich.table import Table
 from bonsai import __version__
 from bonsai.agent import render_agent_context, render_agent_guide
 from bonsai.config import load_config
+from bonsai.doctor import render_doctor_json, validate_doctor_format
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.models import OpenUrlPlan
@@ -23,6 +24,7 @@ from bonsai.onboarding import (
     detect_project_defaults,
     write_starter_config,
 )
+from bonsai.port_repair import render_port_repair_json, validate_port_repair_format
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
 from bonsai.status import render_workspace_list, render_workspace_status
@@ -32,6 +34,7 @@ from bonsai.workflows import (
     execute_checkout,
     execute_cleanup,
     execute_clone,
+    execute_doctor_apply,
     execute_init,
     execute_move,
     execute_remove,
@@ -43,6 +46,7 @@ from bonsai.workflows import (
     plan_current_worktree_status,
     plan_open_url,
     plan_open_url_for_worktree,
+    plan_port_repairs,
     plan_workspace_summary,
     repo_config_path,
     workspace_config_path,
@@ -588,6 +592,35 @@ def repair(
         _fail(exc)
 
 
+@app.command("repair-ports")
+def repair_ports(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    """Preview slot reassignments for worktrees with busy ports."""
+    try:
+        output_format = validate_port_repair_format(output_format)
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_port_repairs(root_path)
+        if output_format == "json":
+            typer.echo(render_port_repair_json(plan, root_path), nl=False)
+            return
+
+        console.print("repair-ports dry run")
+        if not plan.items:
+            console.print("No port repairs needed")
+            return
+        for item in plan.items:
+            console.print(f"{item.branch} slot {item.current_slot} -> {item.proposed_slot}")
+            for service in item.services:
+                console.print(f"  {service.port_env} {service.old_port} -> {service.new_port}")
+        console.print("No files changed")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command()
 def cleanup(
     apply: bool = typer.Option(False, "--apply", help="Remove eligible worktrees."),
@@ -615,11 +648,35 @@ def cleanup(
 
 
 @app.command()
-def doctor() -> None:
+def doctor(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+    apply: bool = typer.Option(False, "--apply", help="Apply safe workspace repairs."),
+) -> None:
     """Check workspace health and report repair hints."""
     try:
+        output_format = validate_doctor_format(output_format)
         root_path = find_workspace_root(Path.cwd())
-        report = check_workspace_health(SubprocessRunner(), root_path)
+        apply_plan = None
+        runner = SubprocessRunner()
+        if apply:
+            apply_plan = execute_doctor_apply(runner, root_path)
+        report = check_workspace_health(runner, root_path)
+        if output_format == "json":
+            typer.echo(render_doctor_json(report, root_path, apply_plan), nl=False)
+            if report.failed:
+                raise typer.Exit(code=1)
+            return
+
+        if apply:
+            console.print("doctor apply")
+            if apply_plan is not None and apply_plan.actions:
+                for action in apply_plan.actions:
+                    console.print(f"{action.kind} {action.detail}")
+            else:
+                console.print("No repairs applied")
         table = Table(title="Bonsai doctor")
         table.add_column("Check")
         table.add_column("Status")

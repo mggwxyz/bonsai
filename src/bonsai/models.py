@@ -129,6 +129,8 @@ class DoctorCheck:
     status: str
     detail: str
     hint: str | None = None
+    id: str | None = None
+    repair: str | None = None
 
 
 @dataclass(frozen=True)
@@ -138,6 +140,39 @@ class DoctorReport:
     @property
     def failed(self) -> bool:
         return any(check.status == "fail" for check in self.checks)
+
+
+@dataclass(frozen=True)
+class DoctorApplyAction:
+    kind: str
+    detail: str
+
+
+@dataclass(frozen=True)
+class DoctorApplyPlan:
+    actions: tuple[DoctorApplyAction, ...]
+
+
+@dataclass(frozen=True)
+class PortRepairServiceChange:
+    name: str
+    port_env: str
+    old_port: int
+    new_port: int
+
+
+@dataclass(frozen=True)
+class PortRepairItem:
+    branch: str
+    slug: str
+    current_slot: int
+    proposed_slot: int
+    services: tuple[PortRepairServiceChange, ...]
+
+
+@dataclass(frozen=True)
+class PortRepairPlan:
+    items: tuple[PortRepairItem, ...]
 
 
 @dataclass(frozen=True)

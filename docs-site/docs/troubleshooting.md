@@ -10,6 +10,7 @@ Run:
 
 ```bash
 bonsai doctor
+bonsai doctor --format json
 ```
 
 `doctor` checks workspace state, config, git worktrees, generated files, Caddy files, Caddy availability, and configured service port conflicts.
@@ -17,8 +18,10 @@ bonsai doctor
 Failed repairable checks point to:
 
 ```bash
-bonsai sync --apply
+bonsai doctor --apply
 ```
+
+`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
 
 If state points at missing or mis-slotted managed worktrees, preview structural repair first:
 
@@ -32,6 +35,15 @@ Apply the state repair, then refresh generated files:
 bonsai repair --apply
 bonsai sync --apply
 ```
+
+If a branch worktree's configured service ports are already busy, preview a slot reassignment plan:
+
+```bash
+bonsai repair-ports
+bonsai repair-ports --format json
+```
+
+`repair-ports` is preview-only. It proposes the lowest conflict-free slot for affected branch worktrees and does not write state or generated files.
 
 ## Checkout Does Not Change Directories
 

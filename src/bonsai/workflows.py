@@ -6,7 +6,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from bonsai.caddy import caddy_reload_plan
+from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
 from bonsai.compose import detect_compose_project, teardown_compose_project
 from bonsai.config import load_config
 from bonsai.env import parse_env_content
@@ -43,6 +43,8 @@ from bonsai.models import (
     CloneWorkspacePlan,
     CommandLogPlan,
     CommandSpec,
+    DoctorApplyAction,
+    DoctorApplyPlan,
     DoctorCheck,
     DoctorReport,
     FileSymlink,
@@ -50,6 +52,9 @@ from bonsai.models import (
     ManagedWorktree,
     MoveWorktreePlan,
     OpenUrlPlan,
+    PortRepairItem,
+    PortRepairPlan,
+    PortRepairServiceChange,
     RemoveWorktreePlan,
     RepairItem,
     RepairPlan,
@@ -520,6 +525,123 @@ def execute_repair(runner: Runner, workspace_root: Path, apply: bool = False) ->
     return plan
 
 
+def _doctor_repair_action_label(action: str) -> str:
+    if action == "remove":
+        return "removed"
+    if action == "repack":
+        return "repacked"
+    return action
+
+
+def _command_available(runner: Runner, argv: list[str]) -> bool:
+    try:
+        result = runner.run(argv, check=False)
+    except FileNotFoundError:
+        return False
+    return result.returncode == 0
+
+
+def _run_caddy_setup(runner: Runner, config: BonsaiConfig) -> tuple[DoctorApplyAction, ...]:
+    if not config.public_services():
+        return ()
+
+    commands = caddy_setup_plan(
+        auto_install=config.caddy.auto_install,
+        auto_start=config.caddy.auto_start,
+        caddy_exists=_command_available(runner, ["caddy", "version"]),
+        brew_exists=_command_available(runner, ["brew", "--version"]),
+    )
+    actions: list[DoctorApplyAction] = []
+    for command in commands:
+        runner.run(list(command.argv), cwd=command.cwd)
+        actions.append(DoctorApplyAction(kind="caddy", detail=command_summary(command)))
+    return tuple(actions)
+
+
+def execute_doctor_apply(runner: Runner, workspace_root: Path) -> DoctorApplyPlan:
+    actions: list[DoctorApplyAction] = []
+    repair_plan = execute_repair(runner, workspace_root, apply=True)
+    for item in repair_plan.items:
+        label = _doctor_repair_action_label(item.action)
+        actions.append(
+            DoctorApplyAction(
+                kind="repair",
+                detail=f"{label} {item.branch} - {item.reason}",
+            )
+        )
+
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    actions.extend(_run_caddy_setup(runner, config))
+
+    sync_preview = plan_sync(workspace_root)
+    if sync_preview.actions:
+        sync_plan = execute_sync(runner, workspace_root, apply=True)
+        actions.extend(
+            DoctorApplyAction(kind="sync", detail=f"{action.kind} {action.path}")
+            for action in sync_plan.actions
+        )
+        if sync_plan.reload_caddy:
+            actions.append(DoctorApplyAction(kind="sync", detail="reload Caddy"))
+
+    return DoctorApplyPlan(actions=tuple(actions))
+
+
+def _slot_has_listening_port(config: BonsaiConfig, slot: int) -> bool:
+    return any(_check_port_listening(service.base_port + slot) for service in config.services)
+
+
+def _port_repair_service_changes(
+    config: BonsaiConfig,
+    current_slot: int,
+    proposed_slot: int,
+) -> tuple[PortRepairServiceChange, ...]:
+    return tuple(
+        PortRepairServiceChange(
+            name=service.name,
+            port_env=service.port_env,
+            old_port=service.base_port + current_slot,
+            new_port=service.base_port + proposed_slot,
+        )
+        for service in config.services
+    )
+
+
+def _next_port_repair_slot(config: BonsaiConfig, reserved_slots: set[int]) -> int:
+    slot = 1
+    while slot in reserved_slots or _slot_has_listening_port(config, slot):
+        slot += 1
+    return slot
+
+
+def plan_port_repairs(workspace_root: Path) -> PortRepairPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    reserved_slots = {0, *(worktree.slot for worktree in state.worktrees.values())}
+    items: list[PortRepairItem] = []
+
+    for branch, worktree in sorted(state.worktrees.items()):
+        if not _slot_has_listening_port(config, worktree.slot):
+            continue
+        proposed_slot = _next_port_repair_slot(config, reserved_slots)
+        reserved_slots.add(proposed_slot)
+        items.append(
+            PortRepairItem(
+                branch=branch,
+                slug=worktree.slug,
+                current_slot=worktree.slot,
+                proposed_slot=proposed_slot,
+                services=_port_repair_service_changes(
+                    config,
+                    current_slot=worktree.slot,
+                    proposed_slot=proposed_slot,
+                ),
+            )
+        )
+
+    return PortRepairPlan(items=tuple(items))
+
+
 def _resolve_current_worktree(
     state: BonsaiState,
     workspace_root: Path,
@@ -699,14 +821,15 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     name="workspace state",
                     status="fail",
                     detail=f"Missing {state_path}",
+                    id="workspace-state",
                 ),
             )
         )
 
     state = load_state(state_path)
     config = load_workspace_config(workspace_root, state)
-    checks.append(DoctorCheck("workspace state", "ok", str(state_path)))
-    checks.append(DoctorCheck("config", "ok", str(config.path)))
+    checks.append(DoctorCheck("workspace state", "ok", str(state_path), id="workspace-state"))
+    checks.append(DoctorCheck("config", "ok", str(config.path), id="config"))
 
     git_result = runner.run(["git", "--version"], check=False)
     checks.append(
@@ -714,6 +837,7 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
             "git",
             "ok" if git_result.returncode == 0 else "fail",
             git_result.stdout.strip() or "git command failed",
+            id="git",
         )
     )
 
@@ -724,6 +848,8 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     f"worktree {target.branch}",
                     "fail",
                     f"Missing {target.worktree_path}",
+                    id=f"worktree-{target.worktree.slug}",
+                    repair="repair",
                 )
             )
             continue
@@ -733,6 +859,7 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     f"worktree {target.branch}",
                     "fail",
                     f"Not a git worktree: {target.worktree_path}",
+                    id=f"worktree-{target.worktree.slug}",
                 )
             )
         else:
@@ -741,12 +868,20 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     f"worktree {target.branch}",
                     "ok",
                     str(target.worktree_path),
+                    id=f"worktree-{target.worktree.slug}",
                 )
             )
 
         env_path = target.worktree_path / ".env.local"
         if env_path.exists():
-            checks.append(DoctorCheck(f"env {target.branch}", "ok", str(env_path)))
+            checks.append(
+                DoctorCheck(
+                    f"env {target.branch}",
+                    "ok",
+                    str(env_path),
+                    id=f"env-{target.worktree.slug}",
+                )
+            )
         else:
             checks.append(
                 DoctorCheck(
@@ -754,6 +889,8 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     "fail",
                     f"Missing {env_path}",
                     "Run: bonsai sync --apply",
+                    id=f"env-{target.worktree.slug}",
+                    repair="sync",
                 )
             )
 
@@ -766,6 +903,8 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                     "fail",
                     f"Missing or stale {action.path}",
                     "Run: bonsai sync --apply",
+                    id=f"caddy-snippet-{action.path.stem}",
+                    repair="sync",
                 )
             )
 
@@ -780,6 +919,8 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                 "ok" if root_caddyfile.exists() else "fail",
                 str(root_caddyfile),
                 None if root_caddyfile.exists() else "Run: bonsai sync --apply",
+                id="root-caddyfile",
+                repair=None if root_caddyfile.exists() else "sync",
             )
         )
         caddy_result = runner.run(["caddy", "version"], check=False)
@@ -788,6 +929,8 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                 "caddy",
                 "ok" if caddy_result.returncode == 0 else "fail",
                 caddy_result.stdout.strip() or "caddy command failed",
+                id="caddy",
+                repair=None if caddy_result.returncode == 0 else "caddy",
             )
         )
 
@@ -800,10 +943,18 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                         f"port {port}",
                         "fail",
                         f"{service.name} port is already in use",
+                        id=f"port-{port}",
                     )
                 )
             else:
-                checks.append(DoctorCheck(f"port {port}", "ok", service.name))
+                checks.append(
+                    DoctorCheck(
+                        f"port {port}",
+                        "ok",
+                        service.name,
+                        id=f"port-{port}",
+                    )
+                )
 
     return DoctorReport(checks=tuple(checks))
 
