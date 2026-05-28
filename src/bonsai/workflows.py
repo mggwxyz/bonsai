@@ -77,6 +77,15 @@ from bonsai.templates import render_template
 
 ConfigInitializer = Callable[[Path, str, str, Path], None]
 
+_PREPARE_COMMAND_KINDS: tuple[LogKind, ...] = (
+    "preinstall",
+    "install",
+    "postinstall",
+    "presetup",
+    "setup",
+    "postsetup",
+)
+
 
 @dataclass(frozen=True)
 class _PullRequestInfo:
@@ -838,7 +847,17 @@ def execute_start(
             f"Missing generated env file at {env_path}. Run: bonsai sync --apply"
         )
     env = parse_env_content(env_path.read_text(encoding="utf-8"))
-    return run_lifecycle_command(
+    if config.commands.prestart:
+        run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug=target.worktree.slug,
+            kind="prestart",
+            command=config.commands.prestart,
+            cwd=target.worktree_path,
+            env=env,
+        )
+    exit_code = run_lifecycle_command(
         runner,
         workspace_root=workspace_root,
         worktree_slug=target.worktree.slug,
@@ -848,6 +867,20 @@ def execute_start(
         env=env,
         check=False,
     )
+    if config.commands.poststart:
+        post_exit_code = run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug=target.worktree.slug,
+            kind="poststart",
+            command=config.commands.poststart,
+            cwd=target.worktree_path,
+            env=env,
+            check=False,
+        )
+        if exit_code == 0:
+            return post_exit_code
+    return exit_code
 
 
 def plan_command_log(
@@ -1197,6 +1230,29 @@ def run_lifecycle_command(
     return exit_code
 
 
+def run_configured_lifecycle_commands(
+    runner: Runner,
+    config: BonsaiConfig,
+    workspace_root: Path,
+    worktree_slug: str,
+    kinds: tuple[LogKind, ...],
+    cwd: Path,
+    env: Mapping[str, str],
+) -> None:
+    for kind in kinds:
+        command = getattr(config.commands, kind)
+        if command:
+            run_lifecycle_command(
+                runner,
+                workspace_root=workspace_root,
+                worktree_slug=worktree_slug,
+                kind=kind,
+                command=command,
+                cwd=cwd,
+                env=env,
+            )
+
+
 def reload_workspace_caddy(runner: Runner, config: BonsaiConfig, workspace_root: Path) -> None:
     root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
     command = caddy_reload_plan(workspace_root / root_caddyfile)
@@ -1228,26 +1284,15 @@ def execute_clone(
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
     command_env = generated_worktree_env(plan.files)
     default_worktree_slug = branch_slug(plan.state.default_branch)
-    if config.commands.install:
-        run_lifecycle_command(
-            runner,
-            workspace_root=plan.workspace_root,
-            worktree_slug=default_worktree_slug,
-            kind="install",
-            command=config.commands.install,
-            cwd=plan.default_worktree,
-            env=command_env,
-        )
-    if config.commands.setup:
-        run_lifecycle_command(
-            runner,
-            workspace_root=plan.workspace_root,
-            worktree_slug=default_worktree_slug,
-            kind="setup",
-            command=config.commands.setup,
-            cwd=plan.default_worktree,
-            env=command_env,
-        )
+    run_configured_lifecycle_commands(
+        runner,
+        config=config,
+        workspace_root=plan.workspace_root,
+        worktree_slug=default_worktree_slug,
+        kinds=_PREPARE_COMMAND_KINDS,
+        cwd=plan.default_worktree,
+        env=command_env,
+    )
     return plan
 
 
@@ -1386,26 +1431,15 @@ def execute_add(
     reload_workspace_caddy(runner, config, workspace_root)
     command_env = generated_worktree_env(plan.files)
     worktree_slug = plan.updated_state.worktrees[branch].slug
-    if config.commands.install:
-        run_lifecycle_command(
-            runner,
-            workspace_root=workspace_root,
-            worktree_slug=worktree_slug,
-            kind="install",
-            command=config.commands.install,
-            cwd=plan.worktree_path,
-            env=command_env,
-        )
-    if config.commands.setup:
-        run_lifecycle_command(
-            runner,
-            workspace_root=workspace_root,
-            worktree_slug=worktree_slug,
-            kind="setup",
-            command=config.commands.setup,
-            cwd=plan.worktree_path,
-            env=command_env,
-        )
+    run_configured_lifecycle_commands(
+        runner,
+        config=config,
+        workspace_root=workspace_root,
+        worktree_slug=worktree_slug,
+        kinds=_PREPARE_COMMAND_KINDS,
+        cwd=plan.worktree_path,
+        env=command_env,
+    )
     return plan
 
 

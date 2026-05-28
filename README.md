@@ -6,7 +6,8 @@ Bonsai is a macOS-first CLI for managing parallel local development workspaces w
 
 - A workspace root with one default worktree and any number of managed branch worktrees.
 - Stable per-worktree port slots, generated `.env.local` files, and optional Caddy HTTPS snippets.
-- Lifecycle commands for install, setup, and start, with live output and timestamped logs.
+- Lifecycle commands for install, setup, and start, with optional pre/post hooks,
+  live output, and timestamped logs.
 - Shell checkout, editor/browser post-add automation, and agent-friendly context output.
 - Workspace inspection through rich text and JSON `list`, `status`, and `context` views.
 - State repair, generated-file sync, workspace diagnostics, PR-aware cleanup, and Docker Compose teardown during removal.
@@ -83,9 +84,15 @@ base_branch = "main"
 default_parent = "~/Projects"
 
 [commands]
+preinstall = "npm run preinstall"
 install = "npm install"
+postinstall = "npm run postinstall"
+presetup = "npm run presetup"
 setup = "npm db:migrate"
+postsetup = "npm run postsetup"
+prestart = "npm run prestart"
 start = "npm dev"
+poststart = "npm run poststart"
 
 [[env]]
 name = "COMPOSE_PROJECT_NAME"
@@ -145,25 +152,29 @@ Bonsai workspace with an existing root or default-worktree config, it reconciles
 state and generated files; without an existing config, it writes the local root
 config.
 
-Configured `install` and `setup` commands run from the target worktree with
-Bonsai's generated `.env.local` values available in the subprocess environment.
+Configured `install` and `setup` commands, plus their optional `pre*` and
+`post*` hooks, run from the target worktree with Bonsai's generated `.env.local`
+values available in the subprocess environment.
 Their output is streamed live and saved as timestamped lifecycle logs under
-`.bonsai/logs/<worktree-slug>/`. Log kinds are `install`, `setup`, and `start`;
-when multiple runs share a timestamp, Bonsai suffixes and orders the log files
-consistently.
+`.bonsai/logs/<worktree-slug>/`. Log kinds are `preinstall`, `install`,
+`postinstall`, `presetup`, `setup`, `postsetup`, `prestart`, `start`, and
+`poststart`; when multiple runs share a timestamp, Bonsai suffixes and orders
+the log files consistently.
 
 `bonsai start [branch]` runs the configured `[commands].start` command in the
-target worktree. With no branch, it uses the current worktree; with an argument,
-it accepts a branch name, worktree directory, or worktree slug. The process runs
-in the foreground with values from the generated `.env.local` added to the
-environment. Output streams live and is saved as a managed `start` log, but
-Bonsai does not daemonize, supervise, or automatically restart the process.
+target worktree, with optional `prestart` and `poststart` hooks running before
+and after the foreground start command. With no branch, it uses the current
+worktree; with an argument, it accepts a branch name, worktree directory, or
+worktree slug. The process runs in the foreground with values from the generated
+`.env.local` added to the environment. Output streams live and is saved as a
+managed `start` log, but Bonsai does not daemonize, supervise, or automatically
+restart the process.
 
 `bonsai logs [branch]` prints the latest managed lifecycle log for a worktree.
 With no branch, it resolves the current worktree; with an argument, it accepts
 the same branch name, worktree directory, or slug forms as `bonsai start`. Use
-`--command install`, `--command setup`, or `--command start` to filter to the
-latest log for a specific command kind.
+`--command install`, `--command setup`, `--command start`, or a hook kind such as
+`--command preinstall` to filter to the latest log for a specific command kind.
 
 `bonsai add <branch> --editor --open --start` runs explicit post-add actions
 after the worktree is prepared. `--editor` opens the new worktree using

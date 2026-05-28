@@ -19,9 +19,15 @@ class CaddyConfig:
 
 @dataclass(frozen=True)
 class CommandsConfig:
+    preinstall: str | None = None
     install: str | None = None
+    postinstall: str | None = None
+    presetup: str | None = None
     setup: str | None = None
+    postsetup: str | None = None
+    prestart: str | None = None
     start: str | None = None
+    poststart: str | None = None
 
 
 @dataclass(frozen=True)

@@ -7,8 +7,28 @@ from typing import Literal, NamedTuple, cast
 
 from bonsai.errors import BonsaiWorkspaceError
 
-LogKind = Literal["install", "setup", "start"]
-LOG_KINDS: tuple[str, ...] = ("install", "setup", "start")
+LogKind = Literal[
+    "preinstall",
+    "install",
+    "postinstall",
+    "presetup",
+    "setup",
+    "postsetup",
+    "prestart",
+    "start",
+    "poststart",
+]
+LOG_KINDS: tuple[str, ...] = (
+    "preinstall",
+    "install",
+    "postinstall",
+    "presetup",
+    "setup",
+    "postsetup",
+    "prestart",
+    "start",
+    "poststart",
+)
 _LOG_FILENAME_PATTERN = re.compile(
     r"^(?P<timestamp>\d{8}-\d{6})-(?P<kind>[a-z]+)(?:-(?P<suffix>\d+))?\.log$"
 )

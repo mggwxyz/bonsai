@@ -3081,6 +3081,75 @@ def test_execute_add_runs_setup_with_generated_worktree_env(tmp_path: Path) -> N
     assert setup_env["DB_PORT"] == "5556"
 
 
+def test_execute_add_runs_pre_and_post_commands_with_generated_worktree_env(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'preinstall = "echo preinstall"',
+                'install = "yarn install"',
+                'postinstall = "echo postinstall"',
+                'presetup = "echo presetup"',
+                'setup = "yarn setup"',
+                'postsetup = "echo postsetup"',
+                'start = "yarn dev"',
+            ]
+        ),
+    )
+    write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    lifecycle_commands = runner.commands[-6:]
+    assert [command.argv for command in lifecycle_commands] == [
+        ("echo", "preinstall"),
+        ("yarn", "install"),
+        ("echo", "postinstall"),
+        ("echo", "presetup"),
+        ("yarn", "setup"),
+        ("echo", "postsetup"),
+    ]
+    assert all(command.cwd == workspace_root / "feature" for command in lifecycle_commands)
+    log_kinds = [
+        command.log_path.name.removesuffix(".log").split("-", maxsplit=2)[-1]
+        for command in lifecycle_commands
+        if command.log_path is not None
+    ]
+    assert log_kinds == [
+        "preinstall",
+        "install",
+        "postinstall",
+        "presetup",
+        "setup",
+        "postsetup",
+    ]
+    for command in lifecycle_commands:
+        command_env = dict(command.env)
+        assert command_env["COMPOSE_PROJECT_NAME"] == "authentic-feature"
+        assert command_env["FRONTEND_PORT"] == "4201"
+        assert command_env["API_PORT"] == "3334"
+        assert command_env["DB_PORT"] == "5556"
+
+
 def test_execute_add_logs_install_and_setup_under_managed_worktree_slug(
     tmp_path: Path,
 ) -> None:
@@ -3994,6 +4063,64 @@ def test_execute_start_passes_generated_env_to_streamed_command(tmp_path: Path) 
     assert command.log_path is not None
     assert command.log_path.parent == workspace_root / ".bonsai" / "logs" / "feature"
     assert command.log_path.name.endswith("-start.log")
+
+
+def test_execute_start_runs_pre_and_post_commands_around_start(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    config_text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'install = "yarn install"',
+                'setup = "yarn setup"',
+                'prestart = "echo prestart"',
+                'start = "yarn dev"',
+                'poststart = "echo poststart"',
+            ]
+        ),
+    )
+    write_config(default_worktree, config_text)
+    (feature_worktree / ".env.local").write_text(
+        "FRONTEND_PORT=4201\nCOMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    exit_code = execute_start(runner, workspace_root, "feature", feature_worktree)
+
+    assert exit_code == 0
+    assert [command.argv for command in runner.commands] == [
+        ("echo", "prestart"),
+        ("yarn", "dev"),
+        ("echo", "poststart"),
+    ]
+    assert all(command.cwd == feature_worktree for command in runner.commands)
+    log_kinds = [
+        command.log_path.name.removesuffix(".log").split("-", maxsplit=2)[-1]
+        for command in runner.commands
+        if command.log_path is not None
+    ]
+    assert log_kinds == [
+        "prestart",
+        "start",
+        "poststart",
+    ]
 
 
 def test_execute_start_fails_when_start_command_is_missing(tmp_path: Path) -> None:

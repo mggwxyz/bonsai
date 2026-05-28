@@ -298,7 +298,7 @@ $ bonsai logs [OPTIONS] [BRANCH]
 
 **Options**:
 
-* `--command TEXT`: Filter logs by command: install, setup, or start.
+* `--command TEXT`: Filter logs by lifecycle command kind.
 * `--help`: Show this message and exit.
 
 ## `bonsai sync`

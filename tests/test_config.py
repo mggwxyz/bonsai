@@ -77,6 +77,35 @@ def test_load_config_parses_valid_file(tmp_path: Path) -> None:
     assert config.primary_service().name == "frontend"
 
 
+def test_load_config_parses_optional_pre_and_post_commands(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'preinstall = "yarn preinstall"',
+                'install = "yarn install"',
+                'postinstall = "yarn postinstall"',
+                'presetup = "yarn presetup"',
+                'setup = "yarn setup"',
+                'postsetup = "yarn postsetup"',
+                'prestart = "yarn prestart"',
+                'start = "yarn dev"',
+                'poststart = "yarn poststart"',
+            ]
+        ),
+    )
+
+    config = load_config(write_config(tmp_path, text))
+
+    assert config.commands.preinstall == "yarn preinstall"
+    assert config.commands.postinstall == "yarn postinstall"
+    assert config.commands.presetup == "yarn presetup"
+    assert config.commands.postsetup == "yarn postsetup"
+    assert config.commands.prestart == "yarn prestart"
+    assert config.commands.poststart == "yarn poststart"
+
+
 def test_missing_config_file_raises_domain_error(tmp_path: Path) -> None:
     with pytest.raises(BonsaiConfigError, match="Missing .bonsai.toml"):
         load_config(tmp_path / ".bonsai.toml")

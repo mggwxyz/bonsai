@@ -23,9 +23,15 @@ base_branch = "main"
 default_parent = "~/Projects"
 
 [commands]
+preinstall = "npm run preinstall"
 install = "npm install"
+postinstall = "npm run postinstall"
+presetup = "npm run presetup"
 setup = "npm db:migrate"
+postsetup = "npm run postsetup"
+prestart = "npm run prestart"
 start = "npm dev"
+poststart = "npm run poststart"
 
 [[env]]
 name = "COMPOSE_PROJECT_NAME"
@@ -43,9 +49,9 @@ url = "https://${slug}.my-app.localhost"
 
 Bonsai expands branch-specific values into generated files. The most common template value is `${slug}`, which is derived from the branch name and safe to use in ports, URLs, and environment names.
 
-Configured `install`, `setup`, and `start` commands run from the target worktree with Bonsai's generated environment values available in the subprocess environment. `install` and `setup` run while Bonsai prepares clone and branch worktrees. `start` runs through `bonsai start [branch]` or `bonsai add <branch> --start`.
+Configured `install`, `setup`, and `start` commands run from the target worktree with Bonsai's generated environment values available in the subprocess environment. Optional `preinstall`, `postinstall`, `presetup`, `postsetup`, `prestart`, and `poststart` hooks run around those lifecycle commands when configured. `install` and `setup` run while Bonsai prepares clone and branch worktrees. `start` runs through `bonsai start [branch]` or `bonsai add <branch> --start`; `poststart` runs after the foreground start command exits.
 
-Bonsai streams lifecycle command output live and stores timestamped logs under `.bonsai/logs/<worktree-slug>/`. Use `bonsai logs [branch] --command install`, `setup`, or `start` to read the latest log for a command kind.
+Bonsai streams lifecycle command output live and stores timestamped logs under `.bonsai/logs/<worktree-slug>/`. Use `bonsai logs [branch] --command install`, `setup`, `start`, or a hook kind such as `preinstall` to read the latest log for a command kind.
 
 If a worktree uses Docker Compose, set `COMPOSE_PROJECT_NAME` through `[[env]]` so `bonsai remove` and applied `bonsai cleanup` can run `docker compose -p <project> down` for the correct branch-specific project.
 

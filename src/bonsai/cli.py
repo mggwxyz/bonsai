@@ -527,7 +527,7 @@ def logs_command(
     branch: Annotated[str | None, typer.Argument()] = None,
     command: Annotated[
         str | None,
-        typer.Option("--command", help="Filter logs by command: install, setup, or start."),
+        typer.Option("--command", help="Filter logs by lifecycle command kind."),
     ] = None,
 ) -> None:
     try:

@@ -105,9 +105,15 @@ def _caddy(raw: dict[str, Any]) -> CaddyConfig:
 
 def _commands(raw: dict[str, Any]) -> CommandsConfig:
     return CommandsConfig(
+        preinstall=_optional_str(raw, "preinstall"),
         install=_optional_str(raw, "install"),
+        postinstall=_optional_str(raw, "postinstall"),
+        presetup=_optional_str(raw, "presetup"),
         setup=_optional_str(raw, "setup"),
+        postsetup=_optional_str(raw, "postsetup"),
+        prestart=_optional_str(raw, "prestart"),
         start=_optional_str(raw, "start"),
+        poststart=_optional_str(raw, "poststart"),
     )
 
 
