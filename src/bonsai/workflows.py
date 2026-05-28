@@ -642,6 +642,28 @@ def plan_port_repairs(workspace_root: Path) -> PortRepairPlan:
     return PortRepairPlan(items=tuple(items))
 
 
+def execute_port_repairs(
+    runner: Runner,
+    workspace_root: Path,
+    apply: bool = False,
+) -> PortRepairPlan:
+    plan = plan_port_repairs(workspace_root)
+    if not apply or not plan.items:
+        return plan
+
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    updated_worktrees = dict(state.worktrees)
+    for item in plan.items:
+        updated_worktrees[item.branch] = replace(
+            updated_worktrees[item.branch],
+            slot=item.proposed_slot,
+        )
+    save_state(state_path, replace(state, worktrees=updated_worktrees))
+    execute_sync(runner, workspace_root, apply=True)
+    return plan
+
+
 def _resolve_current_worktree(
     state: BonsaiState,
     workspace_root: Path,

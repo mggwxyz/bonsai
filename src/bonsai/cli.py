@@ -37,6 +37,7 @@ from bonsai.workflows import (
     execute_doctor_apply,
     execute_init,
     execute_move,
+    execute_port_repairs,
     execute_remove,
     execute_repair,
     execute_start,
@@ -625,17 +626,23 @@ def repair_ports(
         str,
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
+    apply: bool = typer.Option(False, "--apply", help="Write repaired slots and sync files."),
 ) -> None:
-    """Preview slot reassignments for worktrees with busy ports."""
+    """Plan or apply slot reassignments for worktrees with busy ports."""
     try:
         output_format = validate_port_repair_format(output_format)
         root_path = find_workspace_root(Path.cwd())
-        plan = plan_port_repairs(root_path)
+        plan = (
+            execute_port_repairs(SubprocessRunner(), root_path, apply=True)
+            if apply
+            else plan_port_repairs(root_path)
+        )
         if output_format == "json":
             typer.echo(render_port_repair_json(plan, root_path), nl=False)
             return
 
-        console.print("repair-ports dry run")
+        mode = "apply" if apply else "dry run"
+        console.print(f"repair-ports {mode}")
         if not plan.items:
             console.print("No port repairs needed")
             return
@@ -643,7 +650,10 @@ def repair_ports(
             console.print(f"{item.branch} slot {item.current_slot} -> {item.proposed_slot}")
             for service in item.services:
                 console.print(f"  {service.port_env} {service.old_port} -> {service.new_port}")
-        console.print("No files changed")
+        if apply:
+            console.print("Updated state and regenerated files")
+        else:
+            console.print("No files changed")
     except BonsaiError as exc:
         _fail(exc)
 

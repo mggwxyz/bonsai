@@ -40,6 +40,7 @@ from bonsai.workflows import (
     execute_doctor_apply,
     execute_init,
     execute_move,
+    execute_port_repairs,
     execute_remove,
     execute_repair,
     execute_start,
@@ -1790,6 +1791,93 @@ def test_plan_port_repairs_ignores_default_slot_conflicts(
     plan = workflows.plan_port_repairs(workspace_root)
 
     assert plan.items == ()
+
+
+def test_execute_port_repairs_apply_updates_state_and_syncs_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_a = workspace_root / "feature-a"
+    feature_b = workspace_root / "feature-b"
+    default_worktree.mkdir(parents=True)
+    feature_a.mkdir()
+    feature_b.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+                "feature-b": ManagedWorktree(path="feature-b", slug="feature-b", slot=2),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "bonsai.workflows._check_port_listening",
+        lambda port: port == 4201,
+    )
+
+    runner = RecordingRunner()
+    plan = execute_port_repairs(runner, workspace_root, apply=True)
+
+    assert [(item.branch, item.current_slot, item.proposed_slot) for item in plan.items] == [
+        ("feature-a", 1, 3),
+    ]
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.worktrees["feature-a"].slot == 3
+    assert state.worktrees["feature-b"].slot == 2
+    env_text = (feature_a / ".env.local").read_text(encoding="utf-8")
+    assert "FRONTEND_PORT=4203" in env_text
+    assert "API_PORT=3336" in env_text
+    assert "DB_PORT=5558" in env_text
+    assert ("caddy", "reload", "--config", str(workspace_root / "Caddyfile")) in [
+        command.argv for command in runner.commands
+    ]
+
+
+def test_execute_port_repairs_preview_does_not_update_state_or_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_a = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_a.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr(
+        "bonsai.workflows._check_port_listening",
+        lambda port: port == 4201,
+    )
+
+    plan = execute_port_repairs(RecordingRunner(), workspace_root, apply=False)
+
+    assert [(item.branch, item.current_slot, item.proposed_slot) for item in plan.items] == [
+        ("feature-a", 1, 2),
+    ]
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.worktrees["feature-a"].slot == 1
+    assert not (feature_a / ".env.local").exists()
 
 
 def test_execute_doctor_apply_repairs_syncs_and_sets_up_caddy(tmp_path: Path) -> None:

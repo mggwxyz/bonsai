@@ -1577,6 +1577,47 @@ def test_repair_ports_previews_reassignment_plan(monkeypatch, tmp_path: Path) ->
     assert "No files changed" in result.stdout
 
 
+def test_repair_ports_apply_updates_state_and_generated_files(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_port_repairs(_runner, root: Path, apply: bool = False):
+        calls.append((root, apply))
+        return SimpleNamespace(
+            items=[
+                SimpleNamespace(
+                    branch="feature-a",
+                    slug="feature-a",
+                    current_slot=1,
+                    proposed_slot=5,
+                    services=[
+                        SimpleNamespace(
+                            name="frontend",
+                            port_env="FRONTEND_PORT",
+                            old_port=4201,
+                            new_port=4205,
+                        )
+                    ],
+                )
+            ]
+        )
+
+    monkeypatch.setattr(cli, "execute_port_repairs", fake_execute_port_repairs, raising=False)
+
+    result = runner.invoke(cli.app, ["repair-ports", "--apply"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, True)]
+    assert "repair-ports apply" in result.stdout.lower()
+    assert "feature-a slot 1 -> 5" in result.stdout
+    assert "FRONTEND_PORT 4201 -> 4205" in result.stdout
+    assert "Updated state and regenerated files" in result.stdout
+    assert "No files changed" not in result.stdout
+
+
 def test_repair_ports_json_prints_machine_readable_plan(
     monkeypatch,
     tmp_path: Path,

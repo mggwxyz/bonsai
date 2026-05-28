@@ -40,10 +40,11 @@ If a branch worktree's configured service ports are already busy, preview a slot
 
 ```bash
 bonsai repair-ports
+bonsai repair-ports --apply
 bonsai repair-ports --format json
 ```
 
-`repair-ports` is preview-only. It proposes the lowest conflict-free slot for affected branch worktrees and does not write state or generated files.
+`repair-ports` proposes the lowest conflict-free slot for affected branch worktrees. It is a dry run by default; `repair-ports --apply` writes the proposed slots and regenerates Bonsai-managed files.
 
 ## Checkout Does Not Change Directories
 

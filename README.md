@@ -129,6 +129,7 @@ bonsai sync
 bonsai repair
 bonsai repair --apply
 bonsai repair-ports
+bonsai repair-ports --apply
 bonsai repair-ports --format json
 bonsai cleanup
 bonsai doctor
@@ -280,8 +281,10 @@ Caddy files.
 `bonsai repair-ports` previews slot changes for branch worktrees whose configured
 service ports are already in use. It reserves the default worktree slot and
 existing non-conflicted branch slots, then proposes the lowest conflict-free slot
-for each affected branch. It does not write state or generated files; use
-`bonsai repair-ports --format json` for machine-readable plans.
+for each affected branch. It is a dry run by default. Use
+`bonsai repair-ports --apply` to write the proposed slots and regenerate
+Bonsai-managed files; use `bonsai repair-ports --format json` for
+machine-readable plans.
 
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
 Caddy files, Caddy availability, and configured service port conflicts. Use

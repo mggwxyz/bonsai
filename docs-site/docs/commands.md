@@ -38,7 +38,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `logs`
 * `sync`: Compare or repair generated Bonsai files.
 * `repair`
-* `repair-ports`: Preview slot reassignments for worktrees...
+* `repair-ports`: Plan or apply slot reassignments for...
 * `cleanup`: Remove branch worktrees whose pull...
 * `doctor`: Check workspace health and report repair...
 
@@ -334,7 +334,7 @@ $ bonsai repair [OPTIONS]
 
 ## `bonsai repair-ports`
 
-Preview slot reassignments for worktrees with busy ports.
+Plan or apply slot reassignments for worktrees with busy ports.
 
 **Usage**:
 
@@ -345,6 +345,7 @@ $ bonsai repair-ports [OPTIONS]
 **Options**:
 
 * `--format TEXT`: Output format: text or json.  [default: text]
+* `--apply`: Write repaired slots and sync files.
 * `--help`: Show this message and exit.
 
 ## `bonsai cleanup`
