@@ -29,5 +29,6 @@ The lookup accepts either the branch name or the worktree directory name.
 ## Checkout Behavior
 
 If the requested worktree does not exist, Bonsai prepares one first. It fetches `origin`, uses the remote branch when it exists, or creates a new branch from the configured base branch.
+Pass `--base-branch <branch>` to create a missing branch from a different base branch for that checkout.
 
 Without shell integration, `checkout` prints the resolved path and exits with setup instructions.

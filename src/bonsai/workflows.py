@@ -1551,6 +1551,7 @@ def execute_add(
     runner: Runner,
     branch: str,
     workspace_root: Path,
+    base_branch: str | None = None,
 ) -> AddFilesPlan:
     state_path = workspace_root / ".bonsai" / "state.json"
     state = load_state(state_path)
@@ -1570,12 +1571,18 @@ def execute_add(
                 f"Branch worktree path has branch {existing_branch}, expected {branch}"
             )
     else:
-        base_branch = config.base_branch or state.default_branch
+        creation_base_branch = base_branch or config.base_branch or state.default_branch
         fetch_origin(runner, default_worktree)
         if remote_branch_exists(runner, default_worktree, branch):
             add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
         else:
-            add_new_worktree(runner, default_worktree, branch, plan.worktree_path, base_branch)
+            add_new_worktree(
+                runner,
+                default_worktree,
+                branch,
+                plan.worktree_path,
+                creation_base_branch,
+            )
     apply_symlinks(plan.symlinks)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
@@ -1598,6 +1605,7 @@ def execute_checkout(
     runner: Runner,
     name: str,
     workspace_root: Path,
+    base_branch: str | None = None,
 ) -> CheckoutWorktreePlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
     if name in {state.default_branch, state.default_worktree}:
@@ -1613,7 +1621,7 @@ def execute_checkout(
             created=False,
         )
 
-    add_plan = execute_add(runner, name, workspace_root)
+    add_plan = execute_add(runner, name, workspace_root, base_branch=base_branch)
     return CheckoutWorktreePlan(worktree_path=add_plan.worktree_path, created=True)
 
 

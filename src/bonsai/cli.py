@@ -325,6 +325,13 @@ def init_command(
 @app.command()
 def add(
     branch: str,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Base branch to use when creating a new branch worktree.",
+        ),
+    ] = None,
     editor: Annotated[
         bool,
         typer.Option("--editor", help="Open the prepared worktree in an editor."),
@@ -342,7 +349,11 @@ def add(
     try:
         current_path = Path.cwd()
         root_path = find_workspace_root(current_path)
-        plan = execute_add(SubprocessRunner(), branch, root_path)
+        runner = SubprocessRunner()
+        if base_branch is None:
+            plan = execute_add(runner, branch, root_path)
+        else:
+            plan = execute_add(runner, branch, root_path, base_branch=base_branch)
         console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print(f"Port slot: {plan.slot}")
         if editor:
@@ -379,7 +390,12 @@ def remove_command(
 
 @app.command("move")
 def move_command(name: str, new_folder: str) -> None:
-    """Move a managed worktree folder."""
+    """Move a managed worktree folder.
+
+    The worktree argument accepts a branch name, worktree directory, or worktree slug.
+    Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and refreshes
+    generated files. The default worktree cannot be moved.
+    """
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_move(SubprocessRunner(), name, new_folder, root_path)
@@ -397,11 +413,22 @@ def checkout(
         bool,
         typer.Option("--path", help="Print the resolved worktree path for shell integration."),
     ] = False,
+    base_branch: Annotated[
+        str | None,
+        typer.Option(
+            "--base-branch",
+            help="Base branch to use when creating a new branch worktree.",
+        ),
+    ] = None,
 ) -> None:
     """Resolve or prepare a worktree for shell checkout."""
     try:
         root_path = find_workspace_root(Path.cwd())
-        plan = execute_checkout(SubprocessRunner(), name, root_path)
+        runner = SubprocessRunner()
+        if base_branch is None:
+            plan = execute_checkout(runner, name, root_path)
+        else:
+            plan = execute_checkout(runner, name, root_path, base_branch=base_branch)
         if path:
             typer.echo(str(plan.worktree_path))
             return

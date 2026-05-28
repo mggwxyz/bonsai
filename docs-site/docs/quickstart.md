@@ -30,6 +30,12 @@ cd my-app/main
 bonsai add ma-123-implement-auth
 ```
 
+To create a new branch worktree from a different base branch for one command:
+
+```bash
+bonsai add ma-123-implement-auth --base-branch develop
+```
+
 When you want Bonsai to open the new working context immediately:
 
 ```bash

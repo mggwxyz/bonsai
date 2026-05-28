@@ -30,6 +30,6 @@ const cliDocs = execFileSync(
 mkdirSync(path.dirname(outputPath), {recursive: true});
 writeFileSync(
   outputPath,
-  `---\ntitle: Command Reference\n---\n\n${cliDocs}`,
+  `---\ntitle: Command Reference\n---\n\n${cliDocs.trimEnd()}\n`,
   'utf8',
 );

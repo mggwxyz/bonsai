@@ -601,6 +601,32 @@ def test_add_editor_flag_opens_prepared_worktree(monkeypatch, tmp_path: Path) ->
     assert calls == [("editor", workspace_root / "feature")]
 
 
+def test_add_base_branch_flag_overrides_creation_base(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    def fake_execute_add(
+        runner,
+        branch: str,
+        root: Path,
+        base_branch: str | None = None,
+    ):
+        calls.append((isinstance(runner, FakeRunner), branch, root, base_branch))
+        return SimpleNamespace(worktree_path=root / "feature", slot=1)
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: workspace_root)
+    monkeypatch.setattr(cli, "execute_add", fake_execute_add, raising=False)
+
+    result = runner.invoke(cli.app, ["add", "feature", "--base-branch", "develop"])
+
+    assert result.exit_code == 0
+    assert calls == [(True, "feature", workspace_root, "develop")]
+
+
 def test_add_open_flag_opens_named_worktree_url(monkeypatch, tmp_path: Path) -> None:
     workspace_root = tmp_path / "bonsai-authentic"
     calls = []
@@ -878,6 +904,34 @@ def test_checkout_path_adds_missing_branch(monkeypatch, tmp_path: Path) -> None:
     assert result.exit_code == 0
     assert result.stdout.strip() == str(tmp_path / "feature")
     assert calls == [("feature", tmp_path)]
+
+
+def test_checkout_base_branch_flag_overrides_creation_base(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_checkout(
+        _runner,
+        name: str,
+        root: Path,
+        base_branch: str | None = None,
+    ):
+        calls.append((name, root, base_branch))
+        return SimpleNamespace(worktree_path=root / "feature", created=True)
+
+    monkeypatch.setattr(cli, "execute_checkout", fake_execute_checkout, raising=False)
+
+    result = runner.invoke(
+        cli.app,
+        ["checkout", "--path", "--base-branch", "develop", "feature"],
+    )
+
+    assert result.exit_code == 0
+    assert result.stdout.strip() == str(tmp_path / "feature")
+    assert calls == [("feature", tmp_path, "develop")]
 
 
 def test_checkout_path_keeps_status_output_off_stdout(monkeypatch, tmp_path: Path) -> None:

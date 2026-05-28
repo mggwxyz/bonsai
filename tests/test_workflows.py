@@ -3161,6 +3161,40 @@ def test_execute_add_parses_quoted_install_command(tmp_path: Path) -> None:
     assert runner.commands[-1].argv == ("yarn", "setup")
 
 
+def test_execute_add_can_override_base_branch_for_new_branch(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root, base_branch="develop")
+
+    assert runner.commands[2].argv == (
+        "git",
+        "-C",
+        str(default_worktree),
+        "worktree",
+        "add",
+        "-b",
+        "feature",
+        str(workspace_root / "feature"),
+        "origin/develop",
+    )
+
+
 def test_execute_add_runs_setup_after_install(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
@@ -4404,3 +4438,31 @@ def test_execute_checkout_adds_missing_branch_with_existing_add_workflow(tmp_pat
         str(workspace_root / "feature"),
         "origin/main",
     )
+
+
+def test_execute_checkout_can_override_base_branch_for_missing_branch(
+    tmp_path: Path,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    plan = execute_checkout(runner, "feature", workspace_root, base_branch="develop")
+
+    assert plan.worktree_path == workspace_root / "feature"
+    assert plan.created is True
+    assert runner.commands[2].argv[-1] == "origin/develop"

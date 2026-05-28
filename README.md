@@ -186,6 +186,8 @@ after the worktree is prepared. `--editor` opens the new worktree using
 local URL; and `--start` runs the configured start command in the foreground.
 When multiple flags are passed, Bonsai opens the editor, opens the browser, then
 starts the app.
+Pass `--base-branch <branch>` to create a missing branch worktree from a
+different base branch for that command.
 
 ## Shell Integration
 
@@ -209,7 +211,8 @@ directory name.
 If `bonsai checkout <branch>` does not find a managed worktree, Bonsai prepares
 one first. It fetches `origin`, uses the remote branch when it exists, or creates
 a new branch from the configured base branch before changing directories through
-the shell integration.
+the shell integration. Pass `--base-branch <branch>` to create a missing branch
+from a different base branch for that checkout.
 
 `bonsai remove <worktree>` removes a managed worktree and its directory. Bonsai
 refuses to remove a worktree with uncommitted changes unless you pass `--force`.

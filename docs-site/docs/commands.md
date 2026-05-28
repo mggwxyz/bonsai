@@ -108,6 +108,7 @@ $ bonsai add [OPTIONS] BRANCH
 
 **Options**:
 
+* `--base-branch TEXT`: Base branch to use when creating a new branch worktree.
 * `--editor`: Open the prepared worktree in an editor.
 * `--open`: Open the prepared worktree&#x27;s primary local URL.
 * `--start`: Run the configured start command after add.
@@ -135,6 +136,10 @@ $ bonsai remove [OPTIONS] NAME
 ## `bonsai move`
 
 Move a managed worktree folder.
+
+The worktree argument accepts a branch name, worktree directory, or worktree slug.
+Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and refreshes
+generated files. The default worktree cannot be moved.
 
 **Usage**:
 
@@ -168,6 +173,7 @@ $ bonsai checkout [OPTIONS] NAME
 **Options**:
 
 * `--path`: Print the resolved worktree path for shell integration.
+* `--base-branch TEXT`: Base branch to use when creating a new branch worktree.
 * `--help`: Show this message and exit.
 
 ## `bonsai open`
