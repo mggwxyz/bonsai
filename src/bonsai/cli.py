@@ -58,6 +58,7 @@ from bonsai.workflows import (
     plan_workspace_summary,
     repo_config_path,
     workspace_config_path,
+    worktree_name_completions,
 )
 from bonsai.workspace import find_workspace_root
 
@@ -86,6 +87,22 @@ ZSH_SHELL_INIT = """bonsai() {
     "$bonsai_bin" "$@"
   fi
 }
+
+_bonsai_completion() {
+  local bonsai_bin="${commands[bonsai]}"
+  if [[ -z "$bonsai_bin" ]]; then
+    return 1
+  fi
+
+  eval $(env \\
+    _TYPER_COMPLETE_ARGS="${words[1,$CURRENT]}" \\
+    _BONSAI_COMPLETE=complete_zsh \\
+    "$bonsai_bin")
+}
+
+if (( $+functions[compdef] )); then
+  compdef _bonsai_completion bonsai
+fi
 """
 SHELL_INTEGRATION_START = "# >>> bonsai shell integration >>>"
 SHELL_INTEGRATION_END = "# <<< bonsai shell integration <<<"
@@ -123,6 +140,57 @@ def _print_command_result(rendered: str | tuple[CommandRenderable, ...]) -> None
         return
     for item in rendered:
         console.print(item)
+
+
+def _complete_worktree_names(incomplete: str) -> list[str]:
+    return _complete_worktree_names_from_workspace(incomplete, include_default=True)
+
+
+def _complete_managed_worktree_names(incomplete: str) -> list[str]:
+    return _complete_worktree_names_from_workspace(incomplete, include_default=False)
+
+
+# Typer applies a prefix-only post-filter after callbacks return. Bonsai already
+# filters these values with its own alias matching, which includes substrings.
+class _CompletionValue(str):
+    def startswith(self, _prefix: str, *_args) -> bool:
+        return True
+
+
+def _complete_worktree_names_for_typer(
+    ctx,
+    args,
+    incomplete: str,
+) -> list[str]:
+    _ = (ctx, args)
+    return [_CompletionValue(value) for value in _complete_worktree_names(incomplete)]
+
+
+def _complete_managed_worktree_names_for_typer(
+    ctx,
+    args,
+    incomplete: str,
+) -> list[str]:
+    _ = (ctx, args)
+    return [_CompletionValue(value) for value in _complete_managed_worktree_names(incomplete)]
+
+
+def _complete_worktree_names_from_workspace(
+    incomplete: str,
+    *,
+    include_default: bool,
+) -> list[str]:
+    try:
+        workspace_root = find_workspace_root(Path.cwd())
+        return list(
+            worktree_name_completions(
+                workspace_root,
+                incomplete,
+                include_default=include_default,
+            )
+        )
+    except (BonsaiError, OSError, ValueError, KeyError):
+        return []
 
 
 def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[str]:
@@ -373,7 +441,7 @@ def add(
 
 @app.command("remove")
 def remove_command(
-    name: str,
+    name: Annotated[str, typer.Argument(autocompletion=_complete_managed_worktree_names_for_typer)],
     force: Annotated[
         bool,
         typer.Option("--force", help="Remove a worktree with uncommitted changes."),
@@ -391,7 +459,10 @@ def remove_command(
 
 
 @app.command("move")
-def move_command(name: str, new_folder: str) -> None:
+def move_command(
+    name: Annotated[str, typer.Argument(autocompletion=_complete_managed_worktree_names_for_typer)],
+    new_folder: str,
+) -> None:
     """Move a managed worktree folder.
 
     The worktree argument accepts a branch name, worktree directory, or worktree slug.
@@ -410,7 +481,7 @@ def move_command(name: str, new_folder: str) -> None:
 
 @app.command()
 def checkout(
-    name: str,
+    name: Annotated[str, typer.Argument(autocompletion=_complete_worktree_names_for_typer)],
     path: Annotated[
         bool,
         typer.Option("--path", help="Print the resolved worktree path for shell integration."),
@@ -445,11 +516,20 @@ def checkout(
 
 
 @app.command("open")
-def open_command() -> None:
-    """Open the current worktree's primary local URL."""
+def open_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+) -> None:
+    """Open a worktree's primary local URL."""
     try:
         root_path = find_workspace_root(Path.cwd())
-        _open_url(plan_open_url(root_path, Path.cwd()))
+        if name is None:
+            plan = plan_open_url(root_path, Path.cwd())
+        else:
+            plan = plan_open_url_for_worktree(root_path, name)
+        _open_url(plan)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -551,7 +631,12 @@ def status_command(
 
 
 @app.command()
-def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
+def start(
+    branch: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+) -> None:
     """Run the configured start command in a worktree."""
     try:
         root_path = find_workspace_root(Path.cwd())
@@ -565,7 +650,10 @@ def start(branch: Annotated[str | None, typer.Argument()] = None) -> None:
 
 @app.command("logs")
 def logs_command(
-    branch: Annotated[str | None, typer.Argument()] = None,
+    branch: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
     command: Annotated[
         str | None,
         typer.Option("--command", help="Filter logs by lifecycle command kind."),

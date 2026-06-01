@@ -27,7 +27,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `remove`: Remove a managed worktree.
 * `move`: Move a managed worktree folder.
 * `checkout`: Resolve or prepare a worktree for shell...
-* `open`: Open the current worktree&#x27;s primary local...
+* `open`: Open a worktree&#x27;s primary local URL.
 * `context`: Print Bonsai facts for the current worktree.
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
@@ -162,13 +162,17 @@ $ bonsai checkout [OPTIONS] NAME
 
 ## `bonsai open`
 
-Open the current worktree&#x27;s primary local URL.
+Open a worktree&#x27;s primary local URL.
 
 **Usage**:
 
 ```console
-$ bonsai open [OPTIONS]
+$ bonsai open [OPTIONS] [NAME]
 ```
+
+**Arguments**:
+
+* `[NAME]`
 
 **Options**:
 

@@ -268,6 +268,72 @@ def resolve_managed_worktree(state: BonsaiState, name: str) -> ResolvedWorktree 
     return None
 
 
+def _worktree_name_aliases(branch: str, worktree: ManagedWorktree) -> tuple[str, ...]:
+    aliases: list[str] = []
+    for alias in (branch, worktree.path, worktree.slug):
+        if alias and alias not in aliases:
+            aliases.append(alias)
+    return tuple(aliases)
+
+
+def _normalized_worktree_name(value: str) -> str:
+    return "".join(character for character in value.casefold() if character.isalnum())
+
+
+def _worktree_name_matches(query: str, alias: str) -> bool:
+    if query == "":
+        return True
+    folded_query = query.casefold()
+    folded_alias = alias.casefold()
+    if folded_query in folded_alias:
+        return True
+    normalized_query = _normalized_worktree_name(query)
+    return bool(normalized_query) and normalized_query in _normalized_worktree_name(alias)
+
+
+def _fuzzy_worktree_target(
+    targets: tuple[WorktreeTarget, ...],
+    name: str,
+) -> WorktreeTarget | None:
+    matches = [
+        target
+        for target in targets
+        if any(
+            _worktree_name_matches(name, alias)
+            for alias in _worktree_name_aliases(
+                target.branch,
+                target.worktree,
+            )
+        )
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        choices = ", ".join(target.branch for target in matches)
+        raise BonsaiWorkspaceError(f"Ambiguous Bonsai worktree {name!r}: {choices}")
+    return None
+
+
+def worktree_name_completions(
+    workspace_root: Path,
+    incomplete: str,
+    *,
+    include_default: bool = True,
+) -> tuple[str, ...]:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    targets = _configured_worktree_targets(state, workspace_root)
+    if not include_default:
+        targets = tuple(target for target in targets if target.branch != state.default_branch)
+
+    completions: list[str] = []
+    for target in targets:
+        for alias in _worktree_name_aliases(target.branch, target.worktree):
+            if alias in completions or not _worktree_name_matches(incomplete, alias):
+                continue
+            completions.append(alias)
+    return tuple(completions)
+
+
 def _paths_refer_to_same_existing_path(left: Path, right: Path) -> bool:
     try:
         return left.samefile(right)
@@ -1535,6 +1601,16 @@ def execute_checkout(
     if resolved is not None:
         return CheckoutWorktreePlan(
             worktree_path=workspace_root / resolved.worktree.path,
+            created=False,
+        )
+
+    fuzzy_target = _fuzzy_worktree_target(
+        _configured_worktree_targets(state, workspace_root),
+        name,
+    )
+    if fuzzy_target is not None:
+        return CheckoutWorktreePlan(
+            worktree_path=fuzzy_target.worktree_path,
             created=False,
         )
 

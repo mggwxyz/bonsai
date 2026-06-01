@@ -58,6 +58,7 @@ from bonsai.workflows import (
     plan_workspace_summary,
     resolve_start_target,
     run_lifecycle_command,
+    worktree_name_completions,
     write_files,
 )
 
@@ -4210,6 +4211,96 @@ def test_execute_checkout_resolves_existing_managed_worktree(tmp_path: Path) -> 
 
     assert plan.worktree_path == workspace_root / "feature"
     assert plan.created is False
+
+
+def test_worktree_name_completions_include_matching_aliases(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    (workspace_root / "feature-authentication").mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature/authentication": ManagedWorktree(
+                    path="feature-authentication",
+                    slug="feature-authentication",
+                    slot=1,
+                )
+            },
+        ),
+    )
+
+    assert worktree_name_completions(workspace_root, "auth") == (
+        "feature/authentication",
+        "feature-authentication",
+    )
+
+
+def test_execute_checkout_resolves_unique_fuzzy_worktree_match(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    (workspace_root / "feature-authentication").mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature/authentication": ManagedWorktree(
+                    path="feature-authentication",
+                    slug="feature-authentication",
+                    slot=1,
+                )
+            },
+        ),
+    )
+
+    plan = execute_checkout(runner, "auth", workspace_root)
+
+    assert plan.worktree_path == workspace_root / "feature-authentication"
+    assert plan.created is False
+    assert runner.commands == []
+
+
+def test_execute_checkout_rejects_ambiguous_fuzzy_worktree_match(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    (workspace_root / "feature-authentication").mkdir()
+    (workspace_root / "fix-auth-redirect").mkdir()
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature/authentication": ManagedWorktree(
+                    path="feature-authentication",
+                    slug="feature-authentication",
+                    slot=1,
+                ),
+                "fix/auth-redirect": ManagedWorktree(
+                    path="fix-auth-redirect",
+                    slug="fix-auth-redirect",
+                    slot=2,
+                ),
+            },
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Ambiguous Bonsai worktree"):
+        execute_checkout(RecordingRunner(), "auth", workspace_root)
 
 
 def test_resolve_start_target_includes_default_worktree(tmp_path: Path) -> None:

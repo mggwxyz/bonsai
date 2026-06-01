@@ -30,6 +30,7 @@ bonsai start
 bonsai logs --command start
 bonsai status
 bonsai open
+bonsai open ma-123-implement-auth
 ```
 
 `bonsai checkout` needs shell integration to change the parent shell's working directory. Without the integration, it prints the resolved path and setup instructions instead.

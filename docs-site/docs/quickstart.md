@@ -70,6 +70,7 @@ Open the worktree's primary local URL:
 
 ```bash
 bonsai open
+bonsai open ma-123-implement-auth
 ```
 
 Inspect the current workspace and worktree context:

@@ -24,7 +24,17 @@ After opening a new shell, checkout changes into the matching worktree:
 bonsai checkout ma-123-implement-auth
 ```
 
-The lookup accepts either the branch name or the worktree directory name.
+The lookup accepts the branch name, worktree directory, or worktree slug. If no
+exact worktree matches, `checkout` resolves a unique fuzzy match before preparing
+a missing branch. If multiple existing worktrees match, Bonsai asks for a more
+specific name.
+
+## Shell Completion
+
+Bonsai's zsh integration also registers shell completion for managed worktree
+aliases on `checkout`, `start`, `logs`, `open`, `remove`, and `move`. If you add
+the integration manually, place `eval "$(bonsai shell-init zsh)"` after zsh
+completion is initialized.
 
 ## Checkout Behavior
 

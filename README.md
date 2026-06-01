@@ -119,6 +119,7 @@ bonsai start ma-123-implement-auth
 bonsai logs
 bonsai logs ma-123-implement-auth --command start
 bonsai open
+bonsai open ma-123-implement-auth
 bonsai context
 bonsai list
 bonsai list --format json
@@ -205,8 +206,15 @@ bonsai install-shell zsh
 ```
 
 After opening a new shell, `bonsai checkout ma-123-implement-auth` changes into
-the matching worktree. The lookup accepts the branch name or the worktree
-directory name.
+the matching worktree. The lookup accepts the branch name, worktree directory,
+or worktree slug. If no exact worktree matches, `checkout` resolves a unique
+fuzzy match before preparing a missing branch. If multiple existing worktrees
+match, Bonsai asks for a more specific name.
+
+Bonsai's zsh integration also registers shell completion for managed worktree
+aliases on `checkout`, `start`, `logs`, `open`, `remove`, and `move`. If you add
+the integration manually, place `eval "$(bonsai shell-init zsh)"` after zsh
+completion is initialized.
 
 If `bonsai checkout <branch>` does not find a managed worktree, Bonsai prepares
 one first. It fetches `origin`, uses the remote branch when it exists, or creates
@@ -239,7 +247,8 @@ and Docker Compose teardown when a removable worktree has a root-level Compose
 file.
 
 Run `bonsai open` from inside a worktree to open that worktree's primary local
-URL in your default browser.
+URL in your default browser. Pass a branch name, worktree directory, or slug to
+open a different worktree's primary URL.
 
 `bonsai list` prints the default worktree and every managed worktree with
 branch, path, slot, kind, generated `.env.local` status, service ports, and

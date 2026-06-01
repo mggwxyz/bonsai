@@ -5,9 +5,11 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+import click
 import pytest
 from rich.console import Console
 from test_config import VALID_CONFIG, write_config
+from typer.main import get_command
 from typer.testing import CliRunner
 
 from bonsai import cli
@@ -967,6 +969,77 @@ url = "https://${slug}.authentic.localhost"
     assert "Opened https://ma-123-test.authentic.localhost" in result.stdout
 
 
+def test_open_opens_primary_url_for_named_worktree(monkeypatch, tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    config_path = tmp_path / "main" / ".bonsai.toml"
+    config_path.write_text(
+        """
+name = "authentic"
+base_branch = "main"
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+""",
+        encoding="utf-8",
+    )
+    opened_urls: list[str] = []
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["open", "ma-123-test"])
+
+    assert result.exit_code == 0
+    assert opened_urls == ["https://ma-123-test.authentic.localhost"]
+    assert "Opened https://ma-123-test.authentic.localhost" in result.stdout
+
+
+def test_complete_worktree_names_returns_matching_aliases(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli._complete_worktree_names("test") == ["MA-123-test", "ma-123-test"]
+
+
+def test_complete_managed_worktree_names_omits_default_worktree(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+
+    assert cli._complete_managed_worktree_names("ma") == ["MA-123-test", "ma-123-test"]
+
+
+def test_checkout_argument_shell_completion_returns_fuzzy_matches(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    root_command = get_command(cli.app)
+    checkout_command = root_command.commands["checkout"]
+    name_argument = checkout_command.params[0]
+    context = click.Context(
+        checkout_command,
+        info_name="checkout",
+        parent=click.Context(root_command, info_name="bonsai"),
+    )
+
+    completions = name_argument.shell_complete(context, "test")
+
+    assert [completion.value for completion in completions] == [
+        "MA-123-test",
+        "ma-123-test",
+    ]
+
+
 def test_context_json_prints_current_worktree_context(monkeypatch, tmp_path: Path) -> None:
     write_checkout_workspace(tmp_path)
     config_path = tmp_path / "main" / ".bonsai.toml"
@@ -1097,6 +1170,10 @@ def test_shell_init_zsh_prints_checkout_wrapper() -> None:
     assert "return $bonsai_exit" in result.stdout
     assert 'cd "$checkout_path"' in result.stdout
     assert '"$bonsai_bin" "$@"' in result.stdout
+    assert "_bonsai_completion() {" in result.stdout
+    assert '_TYPER_COMPLETE_ARGS="${words[1,$CURRENT]}"' in result.stdout
+    assert "_BONSAI_COMPLETE=complete_zsh" in result.stdout
+    assert "compdef _bonsai_completion bonsai" in result.stdout
 
 
 def test_shell_init_zsh_checkout_cd_uses_external_bonsai_inside_wrapper(tmp_path: Path) -> None:
