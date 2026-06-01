@@ -61,7 +61,7 @@ def test_help_lists_core_commands() -> None:
     assert "install-shell" in result.stdout
     assert "init" in result.stdout
     assert "doctor" in result.stdout
-    assert "agent-guide" in result.stdout
+    assert "agent-guide" not in result.stdout
     assert "context" in result.stdout
     assert "logs" in result.stdout
     assert "status" in result.stdout
@@ -72,34 +72,11 @@ def test_help_lists_core_commands() -> None:
     assert repair_help.exit_code == 0
 
 
-def test_agent_guide_prints_package_level_agent_rules() -> None:
+def test_agent_guide_command_is_not_exposed() -> None:
     result = runner.invoke(cli.app, ["agent-guide"])
 
-    assert result.exit_code == 0
-    assert "Bonsai agent guide" in result.stdout
-    assert "Do not guess ports or localhost URLs" in result.stdout
-    assert "bonsai context --format json" in result.stdout
-    assert "bonsai start" in result.stdout
-    assert "bonsai sync --apply" in result.stdout
-
-
-def test_agent_guide_json_prints_machine_readable_rules() -> None:
-    result = runner.invoke(cli.app, ["agent-guide", "--format", "json"])
-
-    assert result.exit_code == 0
-    payload = json.loads(result.stdout)
-    assert payload["schema"] == "bonsai.agent-guide.v1"
-    assert "Do not guess ports or localhost URLs." in payload["rules"]
-    assert payload["commands"]["context"] == "bonsai context --format json"
-    assert payload["commands"]["start"] == "bonsai start"
-    assert payload["commands"]["sync"] == "bonsai sync --apply"
-
-
-def test_agent_guide_rejects_unknown_format() -> None:
-    result = runner.invoke(cli.app, ["agent-guide", "--format", "xml"])
-
-    assert result.exit_code == 1
-    assert "Unsupported format: xml" in result.stdout
+    assert result.exit_code != 0
+    assert "No such command" in result.output
 
 
 def test_clone_executes_workflow(monkeypatch) -> None:

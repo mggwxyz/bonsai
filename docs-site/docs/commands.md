@@ -22,7 +22,6 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `clone`: Clone a repository into a new Bonsai...
-* `agent-guide`: Print package-level guidance for AI agents...
 * `init`: Create a starter .bonsai.toml for the...
 * `add`: Prepare a managed worktree for a branch.
 * `remove`: Remove a managed worktree.
@@ -60,21 +59,6 @@ $ bonsai clone [OPTIONS] GIT_URL NAME
 **Options**:
 
 * `--interactive / --no-interactive`: Create .bonsai.toml interactively when missing.  [default: interactive]
-* `--help`: Show this message and exit.
-
-## `bonsai agent-guide`
-
-Print package-level guidance for AI agents and automation.
-
-**Usage**:
-
-```console
-$ bonsai agent-guide [OPTIONS]
-```
-
-**Options**:
-
-* `--format TEXT`: Output format: text or json.  [default: text]
 * `--help`: Show this message and exit.
 
 ## `bonsai init`

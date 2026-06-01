@@ -12,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from bonsai import __version__
-from bonsai.agent import render_agent_context, render_agent_guide
+from bonsai.agent import render_agent_context
 from bonsai.config import load_config
 from bonsai.doctor import render_doctor_json, validate_doctor_format
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
@@ -247,20 +247,6 @@ def clone(
         )
         console.print(f"Created workspace: {plan.workspace_root}")
         console.print(f"Default worktree: {plan.default_worktree}")
-    except BonsaiError as exc:
-        _fail(exc)
-
-
-@app.command("agent-guide")
-def agent_guide(
-    output_format: Annotated[
-        str,
-        typer.Option("--format", help="Output format: text or json."),
-    ] = "text",
-) -> None:
-    """Print package-level guidance for AI agents and automation."""
-    try:
-        typer.echo(render_agent_guide(output_format), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 

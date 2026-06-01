@@ -120,7 +120,6 @@ bonsai logs
 bonsai logs ma-123-implement-auth --command start
 bonsai open
 bonsai context
-bonsai agent-guide
 bonsai list
 bonsai list --format json
 bonsai status
@@ -258,13 +257,6 @@ humans and automation: workspace root, branch, slot, generated `.env.local`
 status, service ports, service URLs, and recommended Bonsai commands. Use
 `bonsai context --format json` when an AI agent or script needs exact
 worktree-scoped ports and URLs.
-
-`bonsai agent-guide` prints package-level guidance for AI agents and automation.
-It tells agents to avoid guessing ports, avoid hardcoded localhost URLs, prefer
-`bonsai start`, use `bonsai context --format json` for current values, repair
-generated files with `bonsai sync --apply`, and diagnose workspace issues with
-`bonsai doctor`. Use `bonsai agent-guide --format json` for a machine-readable
-contract.
 
 `bonsai sync` compares generated `.env.local` files and Caddy files against the
 current config and state. It is a dry run by default. Use `bonsai sync --apply`
