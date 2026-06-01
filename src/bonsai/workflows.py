@@ -1162,10 +1162,24 @@ def plan_current_worktree_status(
         workspace_root,
         state.default_worktree,
     )
+    current_path_resolved = current_path.resolve()
+    if current_path_resolved == workspace_root.resolve():
+        return WorkspaceStatus(
+            workspace_name=state.name,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+            default_worktree=state.default_worktree,
+            config_path=config_path,
+            current=None,
+            location_kind="workspace_root",
+            location_path=workspace_root,
+            commands=_workspace_summary_commands(),
+        )
+
     branch, worktree, worktree_path = _resolve_current_worktree(
         state,
         workspace_root,
-        current_path,
+        current_path_resolved,
     )
     kind = "default" if branch == state.default_branch else "managed"
     target = WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
@@ -1176,6 +1190,8 @@ def plan_current_worktree_status(
         default_worktree=state.default_worktree,
         config_path=config_path,
         current=build_worktree_facts(config, target, kind).summary,
+        location_kind="worktree",
+        location_path=worktree_path,
         commands=_workspace_summary_commands(),
     )
 

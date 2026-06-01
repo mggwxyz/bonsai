@@ -366,5 +366,7 @@ class WorkspaceStatus:
     default_branch: str
     default_worktree: str
     config_path: Path
-    current: WorktreeSummary
+    current: WorktreeSummary | None
     commands: dict[str, str]
+    location_kind: str = "worktree"
+    location_path: Path | None = None

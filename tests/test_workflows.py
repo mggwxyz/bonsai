@@ -1000,6 +1000,35 @@ def test_plan_current_worktree_status_resolves_current_worktree(tmp_path: Path) 
     assert status.commands["list"] == "bonsai list"
 
 
+def test_plan_current_worktree_status_reports_workspace_root_location(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    status = plan_current_worktree_status(workspace_root, workspace_root)
+
+    assert status.workspace_name == "authentic"
+    assert status.workspace_root == workspace_root
+    assert status.location_kind == "workspace_root"
+    assert status.location_path == workspace_root
+    assert status.current is None
+    assert status.commands["list"] == "bonsai list"
+
+
 def test_plan_workspace_summary_reports_invalid_service_url_template(
     tmp_path: Path,
 ) -> None:

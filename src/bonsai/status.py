@@ -71,10 +71,18 @@ def workspace_list_payload(summary: WorkspaceSummary) -> dict[str, Any]:
 
 
 def workspace_status_payload(status: WorkspaceStatus) -> dict[str, Any]:
+    location_path = (
+        status.location_path
+        or (status.current.worktree_path if status.current is not None else status.workspace_root)
+    )
     return {
         "schema": STATUS_SCHEMA,
         "workspace": _workspace_payload(status),
-        "current": _worktree_payload(status.current),
+        "location": {
+            "kind": status.location_kind,
+            "path": str(location_path),
+        },
+        "current": _worktree_payload(status.current) if status.current is not None else None,
         "commands": dict(status.commands),
     }
 
@@ -129,16 +137,37 @@ def render_workspace_status(status: WorkspaceStatus, output_format: str) -> str:
         f"Root: {status.workspace_root}",
         f"Config: {status.config_path}",
         f"Default branch: {status.default_branch}",
-        f"Branch: {current.branch}",
-        f"Worktree: {current.worktree_path}",
-        f"Path: {current.relative_path}",
-        f"Slug: {current.slug}",
-        f"Slot: {current.slot}",
-        f"Kind: {current.kind}",
-        f"Env file: {current.env_file_path} ({current.env_file_status})",
-        "",
-        "Services:",
     ]
+
+    if current is None:
+        location_path = status.location_path or status.workspace_root
+        lines.extend(
+            [
+                "Location: workspace root (parent folder)",
+                f"Path: {location_path}",
+                "",
+                "Recommended commands:",
+                f"  List worktrees: {status.commands['list']}",
+                f"  Repair generated files: {status.commands['sync']}",
+                f"  Diagnose workspace: {status.commands['doctor']}",
+                "",
+            ]
+        )
+        return "\n".join(lines)
+
+    lines.extend(
+        [
+            f"Branch: {current.branch}",
+            f"Worktree: {current.worktree_path}",
+            f"Path: {current.relative_path}",
+            f"Slug: {current.slug}",
+            f"Slot: {current.slot}",
+            f"Kind: {current.kind}",
+            f"Env file: {current.env_file_path} ({current.env_file_status})",
+            "",
+            "Services:",
+        ]
+    )
     for service in current.services:
         lines.append(f"  {service.name}")
         lines.append(f"    port: {service.port_env}={service.port}")
