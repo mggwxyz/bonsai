@@ -9,10 +9,17 @@ from typing import Annotated
 
 import typer
 from rich.console import Console
-from rich.table import Table
 
 from bonsai import __version__
 from bonsai.agent import render_agent_context
+from bonsai.command_results import (
+    CommandRenderable,
+    render_cleanup_result,
+    render_doctor_result,
+    render_port_repair_result,
+    render_repair_result,
+    render_sync_result,
+)
 from bonsai.config import load_config
 from bonsai.doctor import render_doctor_json, validate_doctor_format
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
@@ -108,6 +115,14 @@ def root(
 def _fail(error: BonsaiError) -> None:
     console.print(f"[red]Error:[/red] {error}")
     raise typer.Exit(code=1)
+
+
+def _print_command_result(rendered: str | tuple[CommandRenderable, ...]) -> None:
+    if isinstance(rendered, str):
+        typer.echo(rendered, nl=False)
+        return
+    for item in rendered:
+        console.print(item)
 
 
 def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[str]:
@@ -562,28 +577,9 @@ def sync(apply: bool = typer.Option(False, "--apply", help="Write regenerated fi
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_sync(SubprocessRunner(), root_path, apply=apply)
-        mode = "apply" if apply else "dry run"
-        console.print(f"sync {mode}")
-        if not plan.actions:
-            console.print("No sync changes")
-        for action in plan.actions:
-            console.print(f"{action.kind} {action.path}")
-        if apply and plan.reload_caddy:
-            console.print("reload Caddy")
-        elif not apply and plan.reload_caddy and plan.actions:
-            console.print("reload Caddy after apply")
+        _print_command_result(render_sync_result(plan, apply=apply))
     except BonsaiError as exc:
         _fail(exc)
-
-
-def _repair_action_label(action: str, apply: bool) -> str:
-    if not apply:
-        return action
-    if action == "remove":
-        return "removed"
-    if action == "repack":
-        return "repacked"
-    return action
 
 
 @app.command()
@@ -593,15 +589,7 @@ def repair(
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_repair(SubprocessRunner(), root_path, apply=apply)
-        mode = "apply" if apply else "dry run"
-        console.print(f"repair {mode}")
-        if not plan.items:
-            console.print("No state repairs needed")
-        for item in plan.items:
-            action = _repair_action_label(item.action, apply)
-            console.print(f"{action} {item.branch} - {item.reason}")
-        if plan.state_changed:
-            console.print("Run: bonsai sync --apply")
+        _print_command_result(render_repair_result(plan, apply=apply))
     except BonsaiError as exc:
         _fail(exc)
 
@@ -627,19 +615,7 @@ def repair_ports(
             typer.echo(render_port_repair_json(plan, root_path), nl=False)
             return
 
-        mode = "apply" if apply else "dry run"
-        console.print(f"repair-ports {mode}")
-        if not plan.items:
-            console.print("No port repairs needed")
-            return
-        for item in plan.items:
-            console.print(f"{item.branch} slot {item.current_slot} -> {item.proposed_slot}")
-            for service in item.services:
-                console.print(f"  {service.port_env} {service.old_port} -> {service.new_port}")
-        if apply:
-            console.print("Updated state and regenerated files")
-        else:
-            console.print("No files changed")
+        _print_command_result(render_port_repair_result(plan, apply=apply))
     except BonsaiError as exc:
         _fail(exc)
 
@@ -657,15 +633,7 @@ def cleanup(
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_cleanup(SubprocessRunner(), root_path, apply=apply, force=force)
-        mode = "apply" if apply else "dry run"
-        console.print(f"cleanup {mode}")
-        if not plan.items:
-            console.print("No managed worktrees")
-        for item in plan.items:
-            suffix = item.reason
-            if item.pr_url is not None:
-                suffix = f"{suffix} ({item.pr_url})"
-            console.print(f"{item.action} {item.branch} - {suffix}")
+        _print_command_result(render_cleanup_result(plan, apply=apply))
     except BonsaiError as exc:
         _fail(exc)
 
@@ -693,21 +661,7 @@ def doctor(
                 raise typer.Exit(code=1)
             return
 
-        if apply:
-            console.print("doctor apply")
-            if apply_plan is not None and apply_plan.actions:
-                for action in apply_plan.actions:
-                    console.print(f"{action.kind} {action.detail}")
-            else:
-                console.print("No repairs applied")
-        table = Table(title="Bonsai doctor")
-        table.add_column("Check")
-        table.add_column("Status")
-        table.add_column("Detail")
-        table.add_column("Hint")
-        for check in report.checks:
-            table.add_row(check.name, check.status, check.detail, check.hint or "")
-        console.print(table)
+        _print_command_result(render_doctor_result(report, apply=apply, apply_plan=apply_plan))
         if report.failed:
             raise typer.Exit(code=1)
     except BonsaiError as exc:
