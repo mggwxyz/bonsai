@@ -1254,6 +1254,28 @@ def test_status_command_prints_current_worktree_status(tmp_path: Path, monkeypat
     assert "List worktrees: bonsai list" in result.stdout
 
 
+def test_status_command_colorizes_terminal_text_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(force_terminal=True, color_system="standard", width=200),
+    )
+
+    result = runner.invoke(cli.app, ["status"], color=True)
+
+    assert result.exit_code == 0
+    assert "\x1b[" in result.stdout
+    assert "Bonsai status" in result.stdout
+    assert "Workspace:" in result.stdout
+    assert "authentic" in result.stdout
+
+
 def test_status_command_reports_workspace_root_location(tmp_path: Path, monkeypatch) -> None:
     write_checkout_workspace(tmp_path)
     write_config(tmp_path / "main", VALID_CONFIG)
@@ -1289,6 +1311,26 @@ def test_status_command_json_prints_current_worktree_status(
     assert payload["current"]["services"][0]["port_env"] == "FRONTEND_PORT"
     assert payload["current"]["services"][0]["port"] == 4201
     assert payload["commands"]["list"] == "bonsai list"
+
+
+def test_status_command_json_stays_uncolored_for_terminal_output(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    write_checkout_workspace(tmp_path)
+    write_config(tmp_path / "main", VALID_CONFIG)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+    monkeypatch.setattr(
+        cli,
+        "console",
+        Console(force_terminal=True, color_system="standard", width=200),
+    )
+
+    result = runner.invoke(cli.app, ["status", "--format", "json"], color=True)
+
+    assert result.exit_code == 0
+    assert "\x1b[" not in result.stdout
+    assert json.loads(result.stdout)["schema"] == "bonsai.status.v1"
 
 
 def test_status_command_json_reports_workspace_root_location(

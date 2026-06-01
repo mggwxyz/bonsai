@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 
 from rich.table import Table
+from rich.text import Text
 
 from bonsai.models import (
     WorkspaceServiceSummary,
@@ -117,6 +118,53 @@ def test_render_workspace_status_text_includes_current_details() -> None:
     assert "FRONTEND_PORT=4201" in rendered
     assert "https://feature.authentic.localhost" in rendered
     assert "List worktrees: bonsai list" in rendered
+
+
+def test_render_workspace_status_text_includes_workspace_root_location() -> None:
+    status = WorkspaceStatus(
+        workspace_name="authentic",
+        workspace_root=Path("/workspace/authentic"),
+        default_branch="main",
+        default_worktree="main",
+        config_path=Path("/workspace/authentic/main/.bonsai.toml"),
+        current=None,
+        commands=make_workspace_summary().commands,
+        location_kind="workspace_root",
+        location_path=Path("/workspace/authentic"),
+    )
+
+    rendered = render_workspace_status(status, "text")
+
+    assert "Location: workspace root (parent folder)" in rendered
+    assert "Path: /workspace/authentic" in rendered
+    assert "List worktrees: bonsai list" in rendered
+
+
+def test_render_workspace_status_color_text_preserves_plain_output() -> None:
+    status = WorkspaceStatus(
+        workspace_name="authentic",
+        workspace_root=Path("/workspace/authentic"),
+        default_branch="main",
+        default_worktree="main",
+        config_path=Path("/workspace/authentic/main/.bonsai.toml"),
+        current=make_worktree_summary(),
+        commands=make_workspace_summary().commands,
+    )
+
+    rendered = render_workspace_status(status, "text", color=True)
+    plain = render_workspace_status(status, "text")
+
+    assert isinstance(rendered, Text)
+    assert rendered.plain == plain
+    styled_fragments = {
+        rendered.plain[span.start : span.end]: str(span.style) for span in rendered.spans
+    }
+    assert styled_fragments["Bonsai status"] == "bold green"
+    assert styled_fragments["Workspace:"] == "bold cyan"
+    assert styled_fragments["Services:"] == "bold"
+    assert styled_fragments["current"] == "green"
+    assert styled_fragments["yes"] == "green"
+    assert styled_fragments["no"] == "dim"
 
 
 def test_render_workspace_status_json_payload() -> None:

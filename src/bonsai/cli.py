@@ -537,7 +537,15 @@ def status_command(
     try:
         root_path = find_workspace_root(Path.cwd())
         status = plan_current_worktree_status(root_path, Path.cwd())
-        typer.echo(render_workspace_status(status, output_format), nl=False)
+        rendered = render_workspace_status(
+            status,
+            output_format,
+            color=output_format.lower() == "text",
+        )
+        if isinstance(rendered, str):
+            typer.echo(rendered, nl=False)
+        else:
+            console.print(rendered, end="")
     except BonsaiError as exc:
         _fail(exc)
 
