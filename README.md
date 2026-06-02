@@ -10,6 +10,7 @@ Bonsai is a macOS-first CLI for managing parallel local development workspaces w
   live output, and timestamped logs.
 - Shell checkout, editor/browser post-add automation, and agent-friendly context output.
 - Workspace inspection through rich text and JSON `list`, `status`, and `context` views.
+- Process-aware port ownership inspection for configured worktree services.
 - State repair, generated-file sync, workspace diagnostics, PR-aware cleanup, and Docker Compose teardown during removal.
 
 ## Local Development
@@ -116,13 +117,23 @@ bonsai checkout ma-123-implement-auth
 bonsai remove ma-123-implement-auth
 bonsai start
 bonsai start ma-123-implement-auth
+bonsai stop
+bonsai stop ma-123-implement-auth
+bonsai restart ma-123-implement-auth
 bonsai logs
 bonsai logs ma-123-implement-auth --command start
 bonsai open
 bonsai open ma-123-implement-auth
+bonsai open ma-123-implement-auth --service api
+bonsai urls
+bonsai urls ma-123-implement-auth --service api
+bonsai urls --diagnose https://api-ma-123-implement-auth.my-app.localhost
 bonsai context
 bonsai list
 bonsai list --format json
+bonsai ports
+bonsai ports --format json
+bonsai ps
 bonsai status
 bonsai status --format json
 bonsai sync
@@ -174,6 +185,13 @@ worktree slug. The process runs in the foreground with values from the generated
 `.env.local` added to the environment. Output streams live and is saved as a
 managed `start` log, but Bonsai does not daemonize, supervise, or automatically
 restart the process.
+
+`bonsai stop [branch]` terminates listener processes on the selected worktree's
+configured service ports when ownership can be matched to that worktree by
+process cwd. External or unknown owners are skipped unless `--force` is passed.
+Use `bonsai stop --all` to stop matching listeners for every worktree.
+`bonsai restart [branch]` runs the same safe stop flow, then starts the selected
+worktree in the foreground.
 
 `bonsai logs [branch]` prints the latest managed lifecycle log for a worktree.
 With no branch, it resolves the current worktree; with an argument, it accepts
@@ -248,12 +266,26 @@ file.
 
 Run `bonsai open` from inside a worktree to open that worktree's primary local
 URL in your default browser. Pass a branch name, worktree directory, or slug to
-open a different worktree's primary URL.
+open a different worktree's primary URL. Pass `--service <name>` to open a
+non-primary public service URL such as an API route.
+
+`bonsai urls` prints configured public service URLs with route diagnostics for
+the root Caddyfile, generated Caddy snippet, Caddy validation, app listener,
+TLS, and local CA trust guidance. Filter by worktree, by `--service <name>`, or
+use `--diagnose <url>` when a specific URL is not working. Use
+`bonsai urls --format json` for automation.
 
 `bonsai list` prints the default worktree and every managed worktree with
 branch, path, slot, kind, generated `.env.local` status, service ports, and
 service URLs. The default text output is a rich table. Use
 `bonsai list --format json` for a machine-readable workspace overview.
+
+`bonsai ports` prints every configured service port with listener ownership
+metadata from `lsof` when available. Each port is classified as `free`, `owned`
+by the matching worktree, `conflict` with another process or worktree, or
+`unknown` when the port is listening but the owner cannot be identified. Use
+`bonsai ports --format json` for automation. `bonsai ps` shows the same data
+filtered to ports with listeners.
 
 `bonsai status` prints the current worktree's Bonsai facts: workspace root,
 config path, branch, slot, generated `.env.local` status, service ports, service
@@ -280,16 +312,18 @@ state, then run `bonsai sync --apply` to refresh generated `.env.local` and
 Caddy files.
 
 `bonsai repair-ports` previews slot changes for branch worktrees whose configured
-service ports are already in use. It reserves the default worktree slot and
-existing non-conflicted branch slots, then proposes the lowest conflict-free slot
-for each affected branch. It is a dry run by default. Use
+service ports conflict with another process or worktree. A listener whose cwd is
+inside the matching worktree is treated as expected and does not trigger a slot
+change. Bonsai reserves the default worktree slot and existing non-conflicted
+branch slots, then proposes the lowest conflict-free slot for each affected
+branch. It is a dry run by default. Use
 `bonsai repair-ports --apply` to write the proposed slots and regenerate
 Bonsai-managed files; use `bonsai repair-ports --format json` for
 machine-readable plans.
 
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
-Caddy files, Caddy availability, and configured service port conflicts. Use
-`bonsai doctor --format json` for machine-readable checks and
+Caddy files, Caddy availability, and owner-aware configured service port
+conflicts. Use `bonsai doctor --format json` for machine-readable checks and
 `bonsai doctor --apply` to run safe workspace repairs: state repair, generated
 file sync, and configured Caddy bootstrap when possible. Structural state drift
 can still be previewed with `bonsai repair`.

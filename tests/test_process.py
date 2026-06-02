@@ -225,6 +225,55 @@ def test_runner_protocol_includes_logged_stream() -> None:
     assert annotations["return"] == "int"
 
 
+def test_runner_protocol_includes_detached_logged_start() -> None:
+    annotations = Runner.run_detached_logged.__annotations__
+
+    assert annotations["argv"] == "list[str]"
+    assert annotations["cwd"] == "Path | None"
+    assert annotations["env"] == "Mapping[str, str] | None"
+    assert annotations["log_path"] == "Path"
+    assert annotations["label"] == "str | None"
+    assert annotations["return"] == "int"
+
+
+def test_subprocess_runner_starts_detached_process_and_writes_log(
+    tmp_path: Path,
+) -> None:
+    pid_path = tmp_path / "child.pid"
+    log_path = tmp_path / "detached.log"
+    runner = SubprocessRunner(
+        console=Console(file=io.StringIO(), force_terminal=False, color_system=None)
+    )
+    script = (
+        "import os, pathlib, time; "
+        f"pathlib.Path({str(pid_path)!r}).write_text(str(os.getpid()), encoding='utf-8'); "
+        "print('ready', flush=True); "
+        "time.sleep(10)"
+    )
+
+    pid = runner.run_detached_logged(
+        [sys.executable, "-u", "-c", script],
+        cwd=tmp_path,
+        log_path=log_path,
+        label="start",
+    )
+
+    try:
+        for _ in range(50):
+            if pid_path.exists():
+                break
+            threading.Event().wait(0.02)
+        assert pid == int(pid_path.read_text(encoding="utf-8"))
+        assert process_is_alive(pid)
+        for _ in range(50):
+            if log_path.exists() and "ready" in log_path.read_text(encoding="utf-8"):
+                break
+            threading.Event().wait(0.02)
+        assert "ready" in log_path.read_text(encoding="utf-8")
+    finally:
+        terminate_process(pid)
+
+
 def test_subprocess_runner_no_log_delegates_to_run_stream(monkeypatch) -> None:
     runner = SubprocessRunner(
         console=Console(file=io.StringIO(), force_terminal=False, color_system=None)
@@ -452,6 +501,29 @@ def test_recording_runner_records_logged_stream_command(tmp_path: Path) -> None:
     assert runner.commands == [
         CommandSpec(
             argv=("yarn", "install"),
+            cwd=Path("/tmp/repo"),
+            env=(("FRONTEND_PORT", "4201"),),
+            log_path=log_path,
+        )
+    ]
+
+
+def test_recording_runner_records_detached_logged_command(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    log_path = tmp_path / "start.log"
+
+    pid = runner.run_detached_logged(
+        ["yarn", "dev"],
+        cwd=Path("/tmp/repo"),
+        env={"FRONTEND_PORT": "4201"},
+        log_path=log_path,
+        label="start",
+    )
+
+    assert pid == 1000
+    assert runner.commands == [
+        CommandSpec(
+            argv=("yarn", "dev"),
             cwd=Path("/tmp/repo"),
             env=(("FRONTEND_PORT", "4201"),),
             log_path=log_path,

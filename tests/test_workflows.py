@@ -1,4 +1,6 @@
+import json
 import re
+import signal
 from dataclasses import replace
 from pathlib import Path
 
@@ -24,6 +26,7 @@ from bonsai.models import (
     CommandSpec,
     FileWrite,
     ManagedWorktree,
+    PortOwner,
     SharedFileConfig,
 )
 from bonsai.ports import allocate_slot
@@ -38,13 +41,16 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
+    execute_down,
     execute_init,
     execute_move,
     execute_port_repairs,
     execute_remove,
     execute_repair,
     execute_start,
+    execute_stop_processes,
     execute_sync,
+    execute_up,
     plan_add_files,
     plan_agent_context,
     plan_clone_workspace,
@@ -54,8 +60,11 @@ from bonsai.workflows import (
     plan_open_url,
     plan_open_url_for_worktree,
     plan_repair,
+    plan_stop_processes,
     plan_sync,
+    plan_workspace_ports,
     plan_workspace_summary,
+    plan_workspace_urls,
     resolve_start_target,
     run_lifecycle_command,
     worktree_name_completions,
@@ -1737,6 +1746,366 @@ def test_check_workspace_health_reports_port_conflicts(
 
     assert report.failed is True
     assert any(check.name == "port 4200" and check.status == "fail" for check in report.checks)
+
+
+def test_plan_workspace_ports_classifies_same_worktree_listener_as_owned(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:4201" in argv:
+                return CommandResult(returncode=0, stdout="p123\ncnode\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{feature_worktree}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    plan = plan_workspace_ports(LsofRunner(), workspace_root)
+    frontend = next(port for port in plan.ports if port.branch == "feature-a" and port.port == 4201)
+
+    assert frontend.status == "owned"
+    assert frontend.owners == (
+        PortOwner(
+            pid=123,
+            command="node",
+            user="michael",
+            cwd=feature_worktree,
+            worktree_branch="feature-a",
+            worktree_path=feature_worktree,
+        ),
+    )
+
+
+def test_doctor_accepts_same_worktree_listener_and_fails_external_listener(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    external_path = tmp_path / "other-app"
+
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "git" and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[0] == "caddy":
+                return CommandResult(returncode=0, stdout="v2.8.0\n")
+            if argv[0] == "lsof" and "-iTCP:4201" in argv:
+                return CommandResult(returncode=0, stdout="p123\ncnode\numichael\n")
+            if argv[0] == "lsof" and "-iTCP:3334" in argv:
+                return CommandResult(returncode=0, stdout="p456\ncruby\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{feature_worktree}\n")
+            if argv == ["lsof", "-a", "-p", "456", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p456\nn{external_path}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    external_path.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    report = check_workspace_health(LsofRunner(), workspace_root)
+
+    assert any(
+        check.name == "port 4201"
+        and check.status == "ok"
+        and "owned by node[123]" in check.detail
+        for check in report.checks
+    )
+    assert any(
+        check.name == "port 3334"
+        and check.status == "fail"
+        and "ruby[456]" in check.detail
+        for check in report.checks
+    )
+
+
+def test_plan_port_repairs_ignores_same_worktree_listener_with_owner_metadata(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    external_path = tmp_path / "other-app"
+
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:4201" in argv:
+                return CommandResult(returncode=0, stdout="p123\ncnode\numichael\n")
+            if argv[0] == "lsof" and "-iTCP:3334" in argv:
+                return CommandResult(returncode=0, stdout="p456\ncruby\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{feature_worktree}\n")
+            if argv == ["lsof", "-a", "-p", "456", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p456\nn{external_path}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    external_path.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    plan = workflows.plan_port_repairs(workspace_root, runner=LsofRunner())
+
+    assert [(item.branch, item.current_slot, item.proposed_slot) for item in plan.items] == [
+        ("feature-a", 1, 2),
+    ]
+    assert plan.items[0].services[0].owners == ()
+    assert plan.items[0].services[1].owners == (
+        PortOwner(
+            pid=456,
+            command="ruby",
+            user="michael",
+            cwd=external_path,
+            worktree_branch=None,
+            worktree_path=None,
+        ),
+    )
+
+
+def test_plan_stop_processes_targets_only_selected_worktree_owners(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    external_path = tmp_path / "other-app"
+
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:4201" in argv:
+                return CommandResult(returncode=0, stdout="p123\ncnode\numichael\n")
+            if argv[0] == "lsof" and "-iTCP:3334" in argv:
+                return CommandResult(returncode=0, stdout="p456\ncruby\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{feature_worktree}\n")
+            if argv == ["lsof", "-a", "-p", "456", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p456\nn{external_path}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    external_path.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    plan = plan_stop_processes(
+        LsofRunner(),
+        workspace_root,
+        current_path=default_worktree,
+        name="feature-a",
+    )
+
+    assert [(item.action, item.owner.pid, item.port_env) for item in plan.items] == [
+        ("stop", 123, "FRONTEND_PORT"),
+        ("skip", 456, "API_PORT"),
+    ]
+    assert "outside selected worktree" in plan.items[1].reason
+
+
+def test_execute_stop_processes_terminates_selected_worktree_owners(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:4201" in argv:
+                return CommandResult(returncode=0, stdout="p123\ncnode\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{feature_worktree}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    killed: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(
+        "bonsai.workflows.os.kill",
+        lambda pid, sig: killed.append((pid, sig)),
+    )
+
+    plan = execute_stop_processes(
+        LsofRunner(),
+        workspace_root,
+        current_path=default_worktree,
+        name="feature-a",
+    )
+
+    assert [(item.action, item.owner.pid) for item in plan.items] == [("stopped", 123)]
+    assert killed == [(123, signal.SIGTERM)]
+
+
+def test_execute_stop_processes_force_terminates_external_owner(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    external_path = tmp_path / "other-app"
+
+    class LsofRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:3334" in argv:
+                return CommandResult(returncode=0, stdout="p456\ncruby\numichael\n")
+            if argv == ["lsof", "-a", "-p", "456", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p456\nn{external_path}\n")
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    external_path.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    killed: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(
+        "bonsai.workflows.os.kill",
+        lambda pid, sig: killed.append((pid, sig)),
+    )
+
+    plan = execute_stop_processes(
+        LsofRunner(),
+        workspace_root,
+        current_path=default_worktree,
+        name="feature-a",
+        force=True,
+    )
+
+    assert [(item.action, item.owner.pid) for item in plan.items] == [("stopped", 456)]
+    assert killed == [(456, signal.SIGTERM)]
 
 
 def test_plan_port_repairs_proposes_stable_conflict_free_slots(
@@ -3527,20 +3896,22 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
     assert not (snippets / "feature-frontend.caddy").exists()
     assert (snippets / "other-frontend.caddy").exists()
     assert set(load_state(workspace_root / ".bonsai" / "state.json").worktrees) == {"other"}
-    assert runner.commands == [
-        CommandSpec(argv=("git", "-C", str(branch_worktree), "status", "--porcelain")),
-        CommandSpec(
-            argv=(
-                "git",
-                "-C",
-                str(default_worktree),
-                "worktree",
-                "remove",
-                str(branch_worktree),
-            )
-        ),
-        CommandSpec(argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))),
-    ]
+    assert runner.commands[0] == CommandSpec(
+        argv=("git", "-C", str(branch_worktree), "status", "--porcelain")
+    )
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "remove",
+            str(branch_worktree),
+        )
+    ) in runner.commands
+    assert runner.commands[-1] == CommandSpec(
+        argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))
+    )
 
 
 def test_execute_remove_tears_down_compose_before_git_remove(tmp_path: Path) -> None:
@@ -3586,12 +3957,16 @@ def test_execute_remove_tears_down_compose_before_git_remove(tmp_path: Path) -> 
     plan = execute_remove(runner, "feature", workspace_root)
 
     assert plan.compose_project_name == "authentic-feature"
-    assert runner.commands[:3] == [
+    status_index = runner.commands.index(
         CommandSpec(argv=("git", "-C", str(branch_worktree), "status", "--porcelain")),
+    )
+    docker_index = runner.commands.index(
         CommandSpec(
             argv=("docker", "compose", "-p", "authentic-feature", "down"),
             cwd=branch_worktree,
         ),
+    )
+    git_remove_index = runner.commands.index(
         CommandSpec(
             argv=(
                 "git",
@@ -3601,8 +3976,9 @@ def test_execute_remove_tears_down_compose_before_git_remove(tmp_path: Path) -> 
                 "remove",
                 str(branch_worktree),
             )
-        ),
-    ]
+        )
+    )
+    assert status_index < docker_index < git_remove_index
 
 
 def test_execute_remove_skips_compose_without_compose_file(tmp_path: Path) -> None:
@@ -4406,6 +4782,181 @@ def test_plan_open_url_for_worktree_rejects_unknown_name(
         plan_open_url_for_worktree(workspace_root, "feature")
 
 
+def test_plan_open_url_for_worktree_renders_selected_service_url(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_open_url_for_worktree(workspace_root, "feature", service_name="api")
+
+    assert plan.branch == "feature"
+    assert plan.worktree_path == feature_worktree
+    assert plan.service_name == "api"
+    assert plan.port == 3334
+    assert plan.url == "https://api-feature.authentic.localhost"
+
+
+def test_plan_open_url_for_worktree_rejects_private_or_unknown_service(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiConfigError, match="No public URL service named db"):
+        plan_open_url_for_worktree(workspace_root, "main", service_name="db")
+
+
+def test_plan_workspace_urls_reports_route_tls_and_app_diagnostics(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class UrlRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["caddy", "version"]:
+                return CommandResult(returncode=0, stdout="v2.8.0\n")
+            if argv[:2] == ["caddy", "validate"]:
+                return CommandResult(returncode=1, stderr="missing Caddyfile\n")
+            if argv[0] == "lsof":
+                return CommandResult(returncode=1)
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+
+    plan = plan_workspace_urls(UrlRunner(), workspace_root, name="feature", service_name="frontend")
+
+    assert len(plan.urls) == 1
+    item = plan.urls[0]
+    assert item.branch == "feature"
+    assert item.service_name == "frontend"
+    assert item.port == 4201
+    assert item.url == "https://feature.authentic.localhost"
+    assert item.caddy_snippet_path == workspace_root / "caddy.d" / "feature-frontend.caddy"
+    checks = {check.name: check for check in item.checks}
+    assert checks["root Caddyfile"].status == "fail"
+    assert checks["Caddy route"].status == "fail"
+    assert checks["Caddy validate"].status == "fail"
+    assert checks["app listener"].status == "warn"
+    assert checks["TLS"].status == "fail"
+    assert checks["local CA trust"].status == "warn"
+    assert "bonsai sync --apply" in checks["Caddy route"].hint
+    assert "bonsai start feature" in checks["app listener"].hint
+
+
+def test_plan_workspace_urls_matches_diagnosed_url(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+
+    plan = plan_workspace_urls(
+        RecordingRunner(),
+        workspace_root,
+        diagnose_url="https://api-feature.authentic.localhost",
+    )
+
+    assert [(item.branch, item.service_name, item.url) for item in plan.urls] == [
+        ("feature", "api", "https://api-feature.authentic.localhost")
+    ]
+
+
+def test_plan_workspace_urls_rejects_unconfigured_diagnosed_url(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="URL is not configured by Bonsai"):
+        plan_workspace_urls(
+            RecordingRunner(),
+            workspace_root,
+            diagnose_url="https://missing.authentic.localhost",
+        )
+
+
 def test_execute_start_passes_generated_env_to_streamed_command(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
@@ -4546,6 +5097,255 @@ def test_execute_start_requires_generated_env_file(tmp_path: Path) -> None:
 
     with pytest.raises(BonsaiWorkspaceError, match=r"bonsai sync --apply"):
         execute_start(RecordingRunner(), workspace_root, None, default_worktree)
+
+
+def test_execute_up_replaces_stale_record_and_tracks_detached_process(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    (feature_worktree / ".env.local").write_text(
+        "FRONTEND_PORT=4201\nCOMPOSE_PROJECT_NAME=authentic-feature\n",
+        encoding="utf-8",
+    )
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+    pid_path = workspace_root / ".bonsai" / "pids" / "feature.json"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text(
+        json.dumps(
+            {
+                "branch": "feature",
+                "worktree_path": str(feature_worktree),
+                "pid": 999,
+                "command": ["yarn", "dev"],
+                "log_path": str(workspace_root / ".bonsai" / "logs" / "feature" / "old.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflows, "_process_is_alive", lambda _pid: False)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+
+    plan = execute_up(
+        runner,
+        workspace_root,
+        "feature",
+        feature_worktree,
+        readiness_timeout=0.01,
+    )
+
+    assert plan.branch == "feature"
+    assert plan.pid == 1000
+    assert plan.stale_pid == 999
+    assert plan.ready_ports == (4201,)
+    assert plan.log_path.parent == workspace_root / ".bonsai" / "logs" / "feature"
+    assert len(runner.commands) == 1
+    command = runner.commands[0]
+    assert command.argv == ("yarn", "dev")
+    assert command.cwd == feature_worktree
+    assert command.env == (
+        ("COMPOSE_PROJECT_NAME", "authentic-feature"),
+        ("FRONTEND_PORT", "4201"),
+    )
+    assert command.log_path == plan.log_path
+    record = json.loads(pid_path.read_text(encoding="utf-8"))
+    assert record["branch"] == "feature"
+    assert record["pid"] == 1000
+    assert record["worktree_path"] == str(feature_worktree)
+    assert record["command"] == ["yarn", "dev"]
+    assert record["log_path"] == str(plan.log_path)
+
+
+def test_execute_up_refuses_when_tracked_process_is_alive(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env.local").write_text("FRONTEND_PORT=4200\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    pid_path = workspace_root / ".bonsai" / "pids" / "main.json"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text(
+        json.dumps(
+            {
+                "branch": "main",
+                "worktree_path": str(default_worktree),
+                "pid": 321,
+                "command": ["yarn", "dev"],
+                "log_path": str(workspace_root / ".bonsai" / "logs" / "main" / "start.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 321)
+
+    with pytest.raises(BonsaiWorkspaceError, match=r"already running"):
+        execute_up(runner, workspace_root, None, default_worktree)
+
+    assert runner.commands == []
+
+
+def test_execute_up_removes_record_and_stops_process_when_readiness_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env.local").write_text("FRONTEND_PORT=4200\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    killed: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 1000)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(
+        "bonsai.workflows.os.kill",
+        lambda pid, sig: killed.append((pid, sig)),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match=r"did not become ready"):
+        execute_up(
+            runner,
+            workspace_root,
+            None,
+            default_worktree,
+            readiness_timeout=0.0,
+        )
+
+    assert killed == [(1000, signal.SIGTERM)]
+    assert not (workspace_root / ".bonsai" / "pids" / "main.json").exists()
+
+
+def test_execute_down_terminates_tracked_process_and_removes_record(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    pid_path = workspace_root / ".bonsai" / "pids" / "main.json"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text(
+        json.dumps(
+            {
+                "branch": "main",
+                "worktree_path": str(default_worktree),
+                "pid": 123,
+                "command": ["yarn", "dev"],
+                "log_path": str(workspace_root / ".bonsai" / "logs" / "main" / "start.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    killed: list[tuple[int, signal.Signals]] = []
+    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 123)
+    monkeypatch.setattr(
+        "bonsai.workflows.os.kill",
+        lambda pid, sig: killed.append((pid, sig)),
+    )
+
+    plan = execute_down(
+        workspace_root,
+        None,
+        default_worktree,
+        terminate_timeout=0.0,
+    )
+
+    assert plan.branch == "main"
+    assert plan.pid == 123
+    assert plan.action == "stopped"
+    assert killed == [(123, signal.SIGTERM)]
+    assert not pid_path.exists()
+
+
+def test_execute_down_removes_stale_record(tmp_path: Path, monkeypatch) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    pid_path = workspace_root / ".bonsai" / "pids" / "main.json"
+    pid_path.parent.mkdir(parents=True)
+    pid_path.write_text(
+        json.dumps(
+            {
+                "branch": "main",
+                "worktree_path": str(default_worktree),
+                "pid": 123,
+                "command": ["yarn", "dev"],
+                "log_path": str(workspace_root / ".bonsai" / "logs" / "main" / "start.log"),
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(workflows, "_process_is_alive", lambda _pid: False)
+
+    plan = execute_down(workspace_root, None, default_worktree)
+
+    assert plan.action == "stale"
+    assert plan.pid == 123
+    assert not pid_path.exists()
 
 
 def test_plan_command_log_reads_latest_log_for_current_worktree(tmp_path: Path) -> None:

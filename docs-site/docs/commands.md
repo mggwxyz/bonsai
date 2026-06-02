@@ -28,12 +28,19 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `move`: Move a managed worktree folder.
 * `checkout`: Resolve or prepare a worktree for shell...
 * `open`: Open a worktree&#x27;s primary local URL.
+* `urls`: Show configured local URLs and route...
 * `context`: Print Bonsai facts for the current worktree.
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
 * `list`: List managed worktrees in the current...
+* `ports`: List configured service ports and listener...
+* `ps`: List configured service ports that...
 * `status`
 * `start`: Run the configured start command in a...
+* `up`: Start the configured app command in the...
+* `down`: Stop a background app process started by...
+* `stop`: Stop listener processes for configured...
+* `restart`: Stop matching listeners, then run the...
 * `logs`
 * `sync`: Compare or repair generated Bonsai files.
 * `repair`
@@ -176,6 +183,28 @@ $ bonsai open [OPTIONS] [NAME]
 
 **Options**:
 
+* `--service TEXT`: Open a specific public service URL.
+* `--help`: Show this message and exit.
+
+## `bonsai urls`
+
+Show configured local URLs and route diagnostics.
+
+**Usage**:
+
+```console
+$ bonsai urls [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--service TEXT`: Filter diagnostics to one public service.
+* `--diagnose TEXT`: Find diagnostics for a specific configured URL.
+* `--format TEXT`: Output format: text or json.  [default: text]
 * `--help`: Show this message and exit.
 
 ## `bonsai context`
@@ -244,6 +273,36 @@ $ bonsai list [OPTIONS]
 * `--format TEXT`: Output format: text or json.  [default: text]
 * `--help`: Show this message and exit.
 
+## `bonsai ports`
+
+List configured service ports and listener ownership.
+
+**Usage**:
+
+```console
+$ bonsai ports [OPTIONS]
+```
+
+**Options**:
+
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--help`: Show this message and exit.
+
+## `bonsai ps`
+
+List configured service ports that currently have listeners.
+
+**Usage**:
+
+```console
+$ bonsai ps [OPTIONS]
+```
+
+**Options**:
+
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--help`: Show this message and exit.
+
 ## `bonsai status`
 
 **Usage**:
@@ -275,6 +334,85 @@ $ bonsai start [OPTIONS] [BRANCH]
 
 * `--help`: Show this message and exit.
 
+## `bonsai up`
+
+Start the configured app command in the background and track its PID.
+
+**Usage**:
+
+```console
+$ bonsai up [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--wait-timeout FLOAT`: Seconds to wait for the primary service port.  [default: 30.0]
+* `--help`: Show this message and exit.
+
+## `bonsai down`
+
+Stop a background app process started by `bonsai up`.
+
+**Usage**:
+
+```console
+$ bonsai down [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--timeout FLOAT`: Seconds to wait before force killing the tracked PID.  [default: 5.0]
+* `--help`: Show this message and exit.
+
+## `bonsai stop`
+
+Stop listener processes for configured service ports.
+
+**Usage**:
+
+```console
+$ bonsai stop [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--all`: Stop matching listeners for all worktrees.
+* `--force`: Stop external or unknown owners of selected ports.
+* `--help`: Show this message and exit.
+
+## `bonsai restart`
+
+Stop matching listeners, then run the configured start command.
+
+**Usage**:
+
+```console
+$ bonsai restart [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--force`: Stop external or unknown owners before starting.
+* `--detach`: Start in the background after stopping.
+* `--wait-timeout FLOAT`: Seconds to wait for detached readiness.  [default: 30.0]
+* `--help`: Show this message and exit.
+
 ## `bonsai logs`
 
 **Usage**:
@@ -290,6 +428,7 @@ $ bonsai logs [OPTIONS] [BRANCH]
 **Options**:
 
 * `--command TEXT`: Filter logs by lifecycle command kind.
+* `-f, --follow`: Follow the selected log file.
 * `--help`: Show this message and exit.
 
 ## `bonsai sync`
@@ -322,7 +461,7 @@ $ bonsai repair [OPTIONS]
 
 ## `bonsai repair-ports`
 
-Plan or apply slot reassignments for worktrees with busy ports.
+Plan or apply slot reassignments for worktrees with conflicting ports.
 
 **Usage**:
 

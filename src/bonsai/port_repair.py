@@ -17,6 +17,31 @@ def validate_port_repair_format(output_format: str) -> str:
     return normalized
 
 
+def _service_payload(service) -> dict[str, Any]:
+    payload = {
+        "name": service.name,
+        "port_env": service.port_env,
+        "old_port": service.old_port,
+        "new_port": service.new_port,
+    }
+    owners = tuple(getattr(service, "owners", ()))
+    if owners:
+        payload["owners"] = [
+            {
+                "pid": owner.pid,
+                "command": owner.command,
+                "user": owner.user,
+                "cwd": str(owner.cwd) if owner.cwd is not None else None,
+                "worktree_branch": owner.worktree_branch,
+                "worktree_path": str(owner.worktree_path)
+                if owner.worktree_path is not None
+                else None,
+            }
+            for owner in owners
+        ]
+    return payload
+
+
 def port_repair_payload(plan: PortRepairPlan, workspace_root: Path) -> dict[str, Any]:
     return {
         "schema": PORT_REPAIR_SCHEMA,
@@ -28,12 +53,7 @@ def port_repair_payload(plan: PortRepairPlan, workspace_root: Path) -> dict[str,
                 "current_slot": item.current_slot,
                 "proposed_slot": item.proposed_slot,
                 "services": [
-                    {
-                        "name": service.name,
-                        "port_env": service.port_env,
-                        "old_port": service.old_port,
-                        "new_port": service.new_port,
-                    }
+                    _service_payload(service)
                     for service in item.services
                 ],
             }

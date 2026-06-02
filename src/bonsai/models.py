@@ -159,6 +159,7 @@ class PortRepairServiceChange:
     port_env: str
     old_port: int
     new_port: int
+    owners: tuple[PortOwner, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -173,6 +174,69 @@ class PortRepairItem:
 @dataclass(frozen=True)
 class PortRepairPlan:
     items: tuple[PortRepairItem, ...]
+
+
+@dataclass(frozen=True)
+class PortOwner:
+    pid: int
+    command: str
+    user: str | None = None
+    cwd: Path | None = None
+    worktree_branch: str | None = None
+    worktree_path: Path | None = None
+
+
+@dataclass(frozen=True)
+class WorkspacePort:
+    branch: str
+    worktree_path: Path
+    service_name: str
+    port_env: str
+    port: int
+    status: str
+    owners: tuple[PortOwner, ...]
+
+
+@dataclass(frozen=True)
+class WorkspacePortsPlan:
+    workspace_root: Path
+    ports: tuple[WorkspacePort, ...]
+
+
+@dataclass(frozen=True)
+class StopProcessItem:
+    action: str
+    branch: str
+    worktree_path: Path
+    service_name: str
+    port_env: str
+    port: int
+    owner: PortOwner
+    reason: str
+
+
+@dataclass(frozen=True)
+class StopProcessPlan:
+    items: tuple[StopProcessItem, ...]
+
+
+@dataclass(frozen=True)
+class AppUpPlan:
+    branch: str
+    worktree_path: Path
+    pid: int
+    log_path: Path
+    ready_ports: tuple[int, ...]
+    stale_pid: int | None = None
+
+
+@dataclass(frozen=True)
+class AppDownPlan:
+    branch: str
+    worktree_path: Path
+    pid: int | None
+    action: str
+    log_path: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -235,6 +299,7 @@ class RemoveWorktreePlan:
     removed_snippets: tuple[Path, ...]
     updated_state: BonsaiState
     compose_project_name: str | None = None
+    removed_logs: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -287,6 +352,36 @@ class OpenUrlPlan:
     branch: str
     worktree_path: Path
     url: str
+    service_name: str
+    port: int
+
+
+@dataclass(frozen=True)
+class UrlCheck:
+    name: str
+    status: str
+    detail: str
+    hint: str | None = None
+
+
+@dataclass(frozen=True)
+class WorkspaceUrl:
+    branch: str
+    worktree_path: Path
+    service_name: str
+    port_env: str
+    port: int
+    primary: bool
+    url: str
+    caddy_snippet_path: Path
+    checks: tuple[UrlCheck, ...]
+
+
+@dataclass(frozen=True)
+class WorkspaceUrlsPlan:
+    workspace_root: Path
+    caddyfile: Path
+    urls: tuple[WorkspaceUrl, ...]
 
 
 @dataclass(frozen=True)

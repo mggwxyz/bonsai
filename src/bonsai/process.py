@@ -53,6 +53,16 @@ class Runner(Protocol):
     ) -> int:
         ...
 
+    def run_detached_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path = Path(),
+        label: str | None = None,
+    ) -> int:
+        ...
+
 
 class SubprocessRunner:
     def __init__(self, console: Console | None = None, stream: TextIO | None = None) -> None:
@@ -139,6 +149,35 @@ class SubprocessRunner:
             if self._stream_is_terminal():
                 return self._run_stream_logged_pty(argv, cwd, process_env, log_file)
             return self._run_stream_logged_pipe(argv, cwd, process_env, log_file)
+
+    def run_detached_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path = Path(),
+        label: str | None = None,
+    ) -> int:
+        process_env = None
+        if env is not None:
+            process_env = os.environ.copy()
+            process_env.update(env)
+
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        label_text = f"{label}: " if label else ""
+        self.console.print(Text(f"Starting {label_text}{format_command(argv, cwd=cwd)}"))
+        with log_path.open("w", encoding="utf-8") as log_file:
+            process = subprocess.Popen(
+                argv,
+                cwd=cwd,
+                env=process_env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                stdin=subprocess.DEVNULL,
+                start_new_session=True,
+                close_fds=True,
+            )
+            return process.pid
 
     def _run_stream_logged_pipe(
         self,
@@ -287,3 +326,26 @@ class RecordingRunner:
             log_path.parent.mkdir(parents=True, exist_ok=True)
             log_path.write_text("", encoding="utf-8")
         return 0
+
+    def run_detached_logged(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        env: Mapping[str, str] | None = None,
+        log_path: Path = Path(),
+        label: str | None = None,
+    ) -> int:
+        _ = label
+        pid = 1000 + len(self.commands)
+        recorded_env = tuple(sorted(env.items())) if env is not None else ()
+        self.commands.append(
+            CommandSpec(
+                argv=tuple(argv),
+                cwd=cwd,
+                env=recorded_env,
+                log_path=log_path,
+            )
+        )
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        log_path.write_text("", encoding="utf-8")
+        return pid

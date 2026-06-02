@@ -8,6 +8,7 @@ from bonsai.models import (
     DoctorReport,
     PortRepairPlan,
     RepairPlan,
+    StopProcessPlan,
     SyncPlan,
 )
 
@@ -66,10 +67,42 @@ def render_port_repair_result(plan: PortRepairPlan, apply: bool) -> str:
         lines.append(f"{item.branch} slot {item.current_slot} -> {item.proposed_slot}")
         for service in item.services:
             lines.append(f"  {service.port_env} {service.old_port} -> {service.new_port}")
+            for owner in getattr(service, "owners", ()):
+                owner_label = f"{owner.command or 'process'}[{owner.pid}]"
+                if owner.worktree_branch is not None:
+                    owner_label = f"{owner_label} in {owner.worktree_branch}"
+                elif owner.cwd is not None:
+                    owner_label = f"{owner_label} at {owner.cwd}"
+                lines.append(f"    owner {owner_label}")
     if apply:
         lines.append("Updated state and regenerated files")
     else:
         lines.append("No files changed")
+    return _join_lines(lines)
+
+
+def _owner_label(owner) -> str:
+    label = f"{owner.command or 'process'}[{owner.pid}]"
+    if owner.worktree_branch is not None:
+        return f"{label} in {owner.worktree_branch}"
+    if owner.cwd is not None:
+        return f"{label} at {owner.cwd}"
+    return label
+
+
+def render_stop_result(plan: StopProcessPlan) -> str:
+    lines = ["stop"]
+    if not plan.items:
+        lines.append("No listener processes matched")
+        return _join_lines(lines)
+    for item in plan.items:
+        line = (
+            f"{item.action} {item.branch} {item.service_name} "
+            f"{item.port_env}={item.port} {_owner_label(item.owner)}"
+        )
+        if item.action == "skip":
+            line = f"{line} - {item.reason}"
+        lines.append(line)
     return _join_lines(lines)
 
 

@@ -18,6 +18,7 @@ from bonsai.command_results import (
     render_doctor_result,
     render_port_repair_result,
     render_repair_result,
+    render_stop_result,
     render_sync_result,
 )
 from bonsai.config import load_config
@@ -34,7 +35,12 @@ from bonsai.onboarding import (
 from bonsai.port_repair import render_port_repair_json, validate_port_repair_format
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
-from bonsai.status import render_workspace_list, render_workspace_status
+from bonsai.status import (
+    render_workspace_list,
+    render_workspace_ports,
+    render_workspace_status,
+    render_workspace_urls,
+)
 from bonsai.workflows import (
     check_workspace_health,
     execute_add,
@@ -42,20 +48,25 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
+    execute_down,
     execute_init,
     execute_move,
     execute_port_repairs,
     execute_remove,
     execute_repair,
     execute_start,
+    execute_stop_processes,
     execute_sync,
+    execute_up,
     plan_agent_context,
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
     plan_open_url_for_worktree,
     plan_port_repairs,
+    plan_workspace_ports,
     plan_workspace_summary,
+    plan_workspace_urls,
     repo_config_path,
     workspace_config_path,
     worktree_name_completions,
@@ -140,6 +151,23 @@ def _print_command_result(rendered: str | tuple[CommandRenderable, ...]) -> None
         return
     for item in rendered:
         console.print(item)
+
+
+def _render_up_result(plan) -> str:
+    lines: list[str] = []
+    if plan.stale_pid is not None:
+        lines.append(f"removed stale pid {plan.stale_pid}")
+    lines.append(f"started {plan.branch} pid={plan.pid}")
+    lines.append(f"log: {plan.log_path}")
+    if plan.ready_ports:
+        lines.append("ready ports: " + ", ".join(str(port) for port in plan.ready_ports))
+    return "\n".join(lines) + "\n"
+
+
+def _render_down_result(plan) -> str:
+    if plan.pid is None:
+        return f"{plan.action} {plan.branch}\n"
+    return f"{plan.action} {plan.branch} pid={plan.pid}\n"
 
 
 def _complete_worktree_names(incomplete: str) -> list[str]:
@@ -521,15 +549,53 @@ def open_command(
         str | None,
         typer.Argument(autocompletion=_complete_worktree_names_for_typer),
     ] = None,
+    service: Annotated[
+        str | None,
+        typer.Option("--service", help="Open a specific public service URL."),
+    ] = None,
 ) -> None:
     """Open a worktree's primary local URL."""
     try:
         root_path = find_workspace_root(Path.cwd())
         if name is None:
-            plan = plan_open_url(root_path, Path.cwd())
+            plan = plan_open_url(root_path, Path.cwd(), service_name=service)
         else:
-            plan = plan_open_url_for_worktree(root_path, name)
+            plan = plan_open_url_for_worktree(root_path, name, service_name=service)
         _open_url(plan)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("urls")
+def urls_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    service_name: Annotated[
+        str | None,
+        typer.Option("--service", help="Filter diagnostics to one public service."),
+    ] = None,
+    diagnose_url: Annotated[
+        str | None,
+        typer.Option("--diagnose", help="Find diagnostics for a specific configured URL."),
+    ] = None,
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    """Show configured local URLs and route diagnostics."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_workspace_urls(
+            SubprocessRunner(),
+            root_path,
+            name=name,
+            service_name=service_name,
+            diagnose_url=diagnose_url,
+        )
+        typer.echo(render_workspace_urls(plan, output_format), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -607,6 +673,46 @@ def list_worktrees(
         _fail(exc)
 
 
+@app.command("ports")
+def ports_command(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    """List configured service ports and listener ownership."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_workspace_ports(SubprocessRunner(), root_path)
+        rendered = render_workspace_ports(plan, output_format)
+        if isinstance(rendered, str):
+            typer.echo(rendered, nl=False)
+        else:
+            console.print(rendered)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("ps")
+def ps_command(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    """List configured service ports that currently have listeners."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = plan_workspace_ports(SubprocessRunner(), root_path)
+        rendered = render_workspace_ports(plan, output_format, only_busy=True)
+        if isinstance(rendered, str):
+            typer.echo(rendered, nl=False)
+        else:
+            console.print(rendered)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command("status")
 def status_command(
     output_format: Annotated[
@@ -648,6 +754,141 @@ def start(
         _fail(exc)
 
 
+@app.command("up")
+def up_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    wait_timeout: Annotated[
+        float,
+        typer.Option("--wait-timeout", help="Seconds to wait for the primary service port."),
+    ] = 30.0,
+) -> None:
+    """Start the configured app command in the background and track its PID."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_up(
+            SubprocessRunner(),
+            root_path,
+            name,
+            Path.cwd(),
+            readiness_timeout=wait_timeout,
+        )
+        typer.echo(_render_up_result(plan), nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("down")
+def down_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    timeout: Annotated[
+        float,
+        typer.Option("--timeout", help="Seconds to wait before force killing the tracked PID."),
+    ] = 5.0,
+) -> None:
+    """Stop a background app process started by `bonsai up`."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_down(
+            root_path,
+            name,
+            Path.cwd(),
+            terminate_timeout=timeout,
+        )
+        typer.echo(_render_down_result(plan), nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("stop")
+def stop_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    all_worktrees: Annotated[
+        bool,
+        typer.Option("--all", help="Stop matching listeners for all worktrees."),
+    ] = False,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Stop external or unknown owners of selected ports."),
+    ] = False,
+) -> None:
+    """Stop listener processes for configured service ports."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_stop_processes(
+            SubprocessRunner(),
+            root_path,
+            current_path=Path.cwd(),
+            name=name,
+            all_worktrees=all_worktrees,
+            force=force,
+        )
+        _print_command_result(render_stop_result(plan))
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("restart")
+def restart_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Stop external or unknown owners before starting."),
+    ] = False,
+    detach: Annotated[
+        bool,
+        typer.Option("--detach", help="Start in the background after stopping."),
+    ] = False,
+    wait_timeout: Annotated[
+        float,
+        typer.Option("--wait-timeout", help="Seconds to wait for detached readiness."),
+    ] = 30.0,
+) -> None:
+    """Stop matching listeners, then run the configured start command."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        label = name or "current worktree"
+        console.print(f"Restarting {label}")
+        runner = SubprocessRunner()
+        if detach:
+            down_plan = execute_down(root_path, name, Path.cwd(), terminate_timeout=5.0)
+            if down_plan.action != "not-running":
+                typer.echo(_render_down_result(down_plan), nl=False)
+        stop_plan = execute_stop_processes(
+            runner,
+            root_path,
+            current_path=Path.cwd(),
+            name=name,
+            force=force,
+        )
+        _print_command_result(render_stop_result(stop_plan))
+        if detach:
+            up_plan = execute_up(
+                runner,
+                root_path,
+                name,
+                Path.cwd(),
+                readiness_timeout=wait_timeout,
+            )
+            typer.echo(_render_up_result(up_plan), nl=False)
+            return
+        exit_code = execute_start(runner, root_path, name, Path.cwd())
+        raise typer.Exit(code=exit_code)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command("logs")
 def logs_command(
     branch: Annotated[
@@ -658,10 +899,19 @@ def logs_command(
         str | None,
         typer.Option("--command", help="Filter logs by lifecycle command kind."),
     ] = None,
+    follow: Annotated[
+        bool,
+        typer.Option("--follow", "-f", help="Follow the selected log file."),
+    ] = False,
 ) -> None:
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = plan_command_log(root_path, branch, Path.cwd(), command)
+        if follow:
+            exit_code = SubprocessRunner().run_stream(
+                ["tail", "-n", "+1", "-f", str(plan.log_path)]
+            )
+            raise typer.Exit(code=exit_code)
         typer.echo(plan.content, nl=False)
     except BonsaiError as exc:
         _fail(exc)
@@ -698,14 +948,15 @@ def repair_ports(
     ] = "text",
     apply: bool = typer.Option(False, "--apply", help="Write repaired slots and sync files."),
 ) -> None:
-    """Plan or apply slot reassignments for worktrees with busy ports."""
+    """Plan or apply slot reassignments for worktrees with conflicting ports."""
     try:
         output_format = validate_port_repair_format(output_format)
         root_path = find_workspace_root(Path.cwd())
+        runner = SubprocessRunner()
         plan = (
-            execute_port_repairs(SubprocessRunner(), root_path, apply=True)
+            execute_port_repairs(runner, root_path, apply=True)
             if apply
-            else plan_port_repairs(root_path)
+            else plan_port_repairs(root_path, runner=runner)
         )
         if output_format == "json":
             typer.echo(render_port_repair_json(plan, root_path), nl=False)

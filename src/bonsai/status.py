@@ -8,14 +8,21 @@ from rich.text import Text
 
 from bonsai.errors import BonsaiConfigError
 from bonsai.models import (
+    PortOwner,
+    WorkspacePort,
+    WorkspacePortsPlan,
     WorkspaceServiceSummary,
     WorkspaceStatus,
     WorkspaceSummary,
+    WorkspaceUrl,
+    WorkspaceUrlsPlan,
     WorktreeSummary,
 )
 
 LIST_SCHEMA = "bonsai.list.v1"
 STATUS_SCHEMA = "bonsai.status.v1"
+PORTS_SCHEMA = "bonsai.ports.v1"
+URLS_SCHEMA = "bonsai.urls.v1"
 
 
 def validate_status_format(output_format: str) -> str:
@@ -62,6 +69,29 @@ def _worktree_payload(worktree: WorktreeSummary) -> dict[str, Any]:
     }
 
 
+def _port_owner_payload(owner: PortOwner) -> dict[str, Any]:
+    return {
+        "pid": owner.pid,
+        "command": owner.command,
+        "user": owner.user,
+        "cwd": str(owner.cwd) if owner.cwd is not None else None,
+        "worktree_branch": owner.worktree_branch,
+        "worktree_path": str(owner.worktree_path) if owner.worktree_path is not None else None,
+    }
+
+
+def _workspace_port_payload(port: WorkspacePort) -> dict[str, Any]:
+    return {
+        "branch": port.branch,
+        "worktree_path": str(port.worktree_path),
+        "service": port.service_name,
+        "port_env": port.port_env,
+        "port": port.port,
+        "status": port.status,
+        "owners": [_port_owner_payload(owner) for owner in port.owners],
+    }
+
+
 def workspace_list_payload(summary: WorkspaceSummary) -> dict[str, Any]:
     return {
         "schema": LIST_SCHEMA,
@@ -88,12 +118,101 @@ def workspace_status_payload(status: WorkspaceStatus) -> dict[str, Any]:
     }
 
 
+def workspace_ports_payload(
+    plan: WorkspacePortsPlan,
+    *,
+    only_busy: bool = False,
+) -> dict[str, Any]:
+    ports = _filtered_workspace_ports(plan.ports, only_busy=only_busy)
+    return {
+        "schema": PORTS_SCHEMA,
+        "workspace": {"root": str(plan.workspace_root)},
+        "ports": [_workspace_port_payload(port) for port in ports],
+    }
+
+
+def _url_check_payload(check) -> dict[str, Any]:
+    return {
+        "name": check.name,
+        "status": check.status,
+        "detail": check.detail,
+        "hint": check.hint,
+    }
+
+
+def _workspace_url_payload(item: WorkspaceUrl) -> dict[str, Any]:
+    return {
+        "branch": item.branch,
+        "worktree_path": str(item.worktree_path),
+        "service": item.service_name,
+        "port_env": item.port_env,
+        "port": item.port,
+        "primary": item.primary,
+        "url": item.url,
+        "caddy_snippet_path": str(item.caddy_snippet_path),
+        "checks": [_url_check_payload(check) for check in item.checks],
+    }
+
+
+def workspace_urls_payload(plan: WorkspaceUrlsPlan) -> dict[str, Any]:
+    return {
+        "schema": URLS_SCHEMA,
+        "workspace": {"root": str(plan.workspace_root)},
+        "caddyfile": str(plan.caddyfile),
+        "urls": [_workspace_url_payload(item) for item in plan.urls],
+    }
+
+
 def _format_ports(services: tuple[WorkspaceServiceSummary, ...]) -> str:
     return "\n".join(f"{service.port_env}={service.port}" for service in services)
 
 
 def _format_urls(services: tuple[WorkspaceServiceSummary, ...]) -> str:
     return "\n".join(service.url for service in services if service.url is not None)
+
+
+def _filtered_workspace_ports(
+    ports,
+    *,
+    only_busy: bool,
+) -> tuple[WorkspacePort, ...]:
+    ports = tuple(ports)
+    if not only_busy:
+        return ports
+    return tuple(port for port in ports if port.status != "free")
+
+
+def _owner_label(owner: PortOwner) -> str:
+    label = f"{owner.command or 'process'}[{owner.pid}]"
+    if owner.worktree_branch is not None:
+        return f"{label} in {owner.worktree_branch}"
+    if owner.cwd is not None:
+        return f"{label} at {owner.cwd}"
+    return label
+
+
+def _format_port_owners(port: WorkspacePort) -> str:
+    if not port.owners:
+        return ""
+    return "\n".join(_owner_label(owner) for owner in port.owners)
+
+
+def _workspace_ports_table(plan: WorkspacePortsPlan, *, only_busy: bool = False) -> Table:
+    table = Table(title="Bonsai ports")
+    table.add_column("Branch")
+    table.add_column("Service")
+    table.add_column("Port", justify="right")
+    table.add_column("Status")
+    table.add_column("Owners")
+    for port in _filtered_workspace_ports(plan.ports, only_busy=only_busy):
+        table.add_row(
+            port.branch,
+            f"{port.service_name}\n{port.port_env}",
+            str(port.port),
+            port.status,
+            _format_port_owners(port),
+        )
+    return table
 
 
 def _workspace_list_table(summary: WorkspaceSummary) -> Table:
@@ -123,6 +242,44 @@ def render_workspace_list(summary: WorkspaceSummary, output_format: str) -> str 
     if output_format == "json":
         return json.dumps(workspace_list_payload(summary), indent=2, sort_keys=True) + "\n"
     return _workspace_list_table(summary)
+
+
+def render_workspace_ports(
+    plan: WorkspacePortsPlan,
+    output_format: str,
+    *,
+    only_busy: bool = False,
+) -> str | Table:
+    output_format = validate_status_format(output_format)
+    if output_format == "json":
+        return json.dumps(
+            workspace_ports_payload(plan, only_busy=only_busy),
+            indent=2,
+            sort_keys=True,
+        ) + "\n"
+    return _workspace_ports_table(plan, only_busy=only_busy)
+
+
+def render_workspace_urls(plan: WorkspaceUrlsPlan, output_format: str) -> str:
+    output_format = validate_status_format(output_format)
+    if output_format == "json":
+        return json.dumps(workspace_urls_payload(plan), indent=2, sort_keys=True) + "\n"
+
+    lines = ["Bonsai URLs"]
+    if not plan.urls:
+        lines.append("No URLs matched")
+        return "\n".join(lines) + "\n"
+    for item in plan.urls:
+        lines.append("")
+        lines.append(f"{item.branch} / {item.service_name}")
+        lines.append(item.url)
+        lines.append(f"{item.port_env}={item.port}")
+        lines.append(f"Caddy: {item.caddy_snippet_path}")
+        for check in item.checks:
+            lines.append(f"[{check.status}] {check.name}: {check.detail}")
+            if check.hint:
+                lines.append(f"  {check.hint}")
+    return "\n".join(lines) + "\n"
 
 
 def _workspace_status_lines(status: WorkspaceStatus) -> list[str]:

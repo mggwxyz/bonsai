@@ -5,12 +5,15 @@ from rich.table import Table
 from rich.text import Text
 
 from bonsai.models import (
+    UrlCheck,
     WorkspaceServiceSummary,
     WorkspaceStatus,
     WorkspaceSummary,
+    WorkspaceUrl,
+    WorkspaceUrlsPlan,
     WorktreeSummary,
 )
-from bonsai.status import render_workspace_list, render_workspace_status
+from bonsai.status import render_workspace_list, render_workspace_status, render_workspace_urls
 
 
 def make_worktree_summary() -> WorktreeSummary:
@@ -63,6 +66,38 @@ def make_workspace_summary() -> WorkspaceSummary:
     )
 
 
+def make_workspace_urls_plan() -> WorkspaceUrlsPlan:
+    return WorkspaceUrlsPlan(
+        workspace_root=Path("/workspace/authentic"),
+        caddyfile=Path("/workspace/authentic/Caddyfile"),
+        urls=(
+            WorkspaceUrl(
+                branch="feature",
+                worktree_path=Path("/workspace/authentic/feature"),
+                service_name="frontend",
+                port_env="FRONTEND_PORT",
+                port=4201,
+                primary=True,
+                url="https://feature.authentic.localhost",
+                caddy_snippet_path=Path("/workspace/authentic/caddy.d/feature-frontend.caddy"),
+                checks=(
+                    UrlCheck(
+                        name="Caddy route",
+                        status="ok",
+                        detail="route file is current",
+                    ),
+                    UrlCheck(
+                        name="app listener",
+                        status="warn",
+                        detail="no listener detected on localhost:4201",
+                        hint="Run: bonsai start feature",
+                    ),
+                ),
+            ),
+        ),
+    )
+
+
 def test_render_workspace_list_text_returns_rich_table() -> None:
     rendered = render_workspace_list(make_workspace_summary(), "text")
 
@@ -95,6 +130,29 @@ def test_render_workspace_list_json_payload() -> None:
         payload["worktrees"][0]["services"][0]["url"]
         == "https://feature.authentic.localhost"
     )
+
+
+def test_render_workspace_urls_text_includes_diagnostic_checks() -> None:
+    rendered = render_workspace_urls(make_workspace_urls_plan(), "text")
+
+    assert "Bonsai URLs" in rendered
+    assert "feature / frontend" in rendered
+    assert "https://feature.authentic.localhost" in rendered
+    assert "[ok] Caddy route: route file is current" in rendered
+    assert "[warn] app listener: no listener detected on localhost:4201" in rendered
+    assert "Run: bonsai start feature" in rendered
+
+
+def test_render_workspace_urls_json_payload() -> None:
+    rendered = render_workspace_urls(make_workspace_urls_plan(), "json")
+
+    payload = json.loads(rendered)
+    assert payload["schema"] == "bonsai.urls.v1"
+    assert payload["workspace"]["root"] == "/workspace/authentic"
+    assert payload["caddyfile"] == "/workspace/authentic/Caddyfile"
+    assert payload["urls"][0]["branch"] == "feature"
+    assert payload["urls"][0]["service"] == "frontend"
+    assert payload["urls"][0]["checks"][1]["hint"] == "Run: bonsai start feature"
 
 
 def test_render_workspace_status_text_includes_current_details() -> None:
