@@ -11,7 +11,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
-from bonsai.compose import detect_compose_project, teardown_compose_project
+from bonsai.compose import (
+    StaleComposeContainer,
+    detect_compose_project,
+    find_stale_compose_containers,
+    remove_stopped_stale_compose_containers,
+    teardown_compose_project,
+)
 from bonsai.config import load_config
 from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiCommandError, BonsaiConfigError, BonsaiWorkspaceError
@@ -648,6 +654,111 @@ def _run_caddy_setup(runner: Runner, config: BonsaiConfig) -> tuple[DoctorApplyA
     return tuple(actions)
 
 
+def _compose_project_names(
+    state: BonsaiState,
+    workspace_root: Path,
+) -> tuple[str, ...]:
+    project_names: list[str] = []
+    seen_project_names: set[str] = set()
+    for target in _configured_worktree_targets(state, workspace_root):
+        if not target.worktree_path.exists():
+            continue
+        project = detect_compose_project(target.worktree_path)
+        if project is None or project.project_name in seen_project_names:
+            continue
+        seen_project_names.add(project.project_name)
+        project_names.append(project.project_name)
+    return tuple(project_names)
+
+
+def _stale_compose_container_detail(
+    containers: tuple[StaleComposeContainer, ...],
+) -> str:
+    project_counts: dict[str, int] = {}
+    for container in containers:
+        project_name = container.project_name or "unknown"
+        project_counts[project_name] = project_counts.get(project_name, 0) + 1
+
+    projects = ", ".join(
+        f"{project}={count}" for project, count in sorted(project_counts.items())
+    )
+    examples = ", ".join(container.name for container in containers[:5])
+    remaining = len(containers) - 5
+    if remaining > 0:
+        examples = f"{examples}, +{remaining} more"
+    return (
+        f"{len(containers)} container(s) across {len(project_counts)} project(s) "
+        f"[{projects}]; examples: {examples}"
+    )
+
+
+def _doctor_compose_network_check(
+    runner: Runner,
+    project_names: tuple[str, ...],
+) -> DoctorCheck | None:
+    if not project_names:
+        return None
+    try:
+        stale = find_stale_compose_containers(runner, project_names)
+    except BonsaiWorkspaceError as exc:
+        return DoctorCheck(
+            "docker compose networks",
+            "fail",
+            str(exc),
+            "Start Docker and rerun bonsai doctor",
+            id="docker-compose-networks",
+        )
+
+    if not stale:
+        return DoctorCheck(
+            "docker compose networks",
+            "ok",
+            "No stale Docker network references",
+            id="docker-compose-networks",
+        )
+
+    stopped = tuple(container for container in stale if not container.running)
+    running = tuple(container for container in stale if container.running)
+    detail_parts: list[str] = []
+    if stopped:
+        detail_parts.append("stopped: " + _stale_compose_container_detail(stopped))
+    if running:
+        detail_parts.append("running: " + _stale_compose_container_detail(running))
+    hint = (
+        "Run: bonsai doctor --apply"
+        if stopped
+        else "Remove or recreate the listed Docker containers manually"
+    )
+    return DoctorCheck(
+        "docker compose networks",
+        "fail",
+        "Stale Docker network references; " + "; ".join(detail_parts),
+        hint,
+        id="docker-compose-networks",
+        repair="docker-compose-networks" if stopped else None,
+    )
+
+
+def _run_compose_network_repairs(
+    runner: Runner,
+    project_names: tuple[str, ...],
+) -> tuple[DoctorApplyAction, ...]:
+    if not project_names:
+        return ()
+    try:
+        stale = find_stale_compose_containers(runner, project_names)
+        removed = remove_stopped_stale_compose_containers(runner, stale)
+    except BonsaiWorkspaceError:
+        return ()
+    return tuple(
+        DoctorApplyAction(
+            kind="docker",
+            detail=f"removed {container.name} stale Docker network reference",
+        )
+        for container in removed
+    )
+
+
 def execute_doctor_apply(runner: Runner, workspace_root: Path) -> DoctorApplyPlan:
     actions: list[DoctorApplyAction] = []
     repair_plan = execute_repair(runner, workspace_root, apply=True)
@@ -662,6 +773,12 @@ def execute_doctor_apply(runner: Runner, workspace_root: Path) -> DoctorApplyPla
 
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
+    actions.extend(
+        _run_compose_network_repairs(
+            runner,
+            _compose_project_names(state, workspace_root),
+        )
+    )
     actions.extend(_run_caddy_setup(runner, config))
 
     sync_preview = plan_sync(workspace_root)
@@ -1284,6 +1401,13 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
                 repair=None if caddy_result.returncode == 0 else "caddy",
             )
         )
+
+    compose_check = _doctor_compose_network_check(
+        runner,
+        _compose_project_names(state, workspace_root),
+    )
+    if compose_check is not None:
+        checks.append(compose_check)
 
     port_plan = plan_workspace_ports(runner, workspace_root)
     checks.extend(_doctor_port_check(port, state.default_branch) for port in port_plan.ports)

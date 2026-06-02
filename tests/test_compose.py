@@ -5,7 +5,10 @@ import pytest
 from bonsai.compose import (
     COMPOSE_FILENAMES,
     ComposeProject,
+    StaleComposeContainer,
     detect_compose_project,
+    find_stale_compose_containers,
+    remove_stopped_stale_compose_containers,
     teardown_compose_project,
 )
 from bonsai.errors import BonsaiCommandError, BonsaiWorkspaceError
@@ -121,3 +124,109 @@ def test_teardown_compose_project_wraps_command_failure(tmp_path: Path) -> None:
     expected = f"Failed to tear down Docker Compose project authentic-feature at {worktree}"
     with pytest.raises(BonsaiWorkspaceError, match=expected):
         teardown_compose_project(FailingComposeRunner(), project)
+
+
+def test_find_stale_compose_containers_reports_missing_network_ids() -> None:
+    class DockerRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["docker", "network", "ls", "--no-trunc", "--quiet"]:
+                return CommandResult(returncode=0, stdout="live-network\n")
+            if argv[:5] == [
+                "docker",
+                "ps",
+                "--all",
+                "--quiet",
+                "--no-trunc",
+            ]:
+                return CommandResult(returncode=0, stdout="stale-id\n")
+            if argv[:2] == ["docker", "inspect"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="""
+[
+  {
+    "Id": "stale-id",
+    "Name": "/authentic-seed-migrate-1",
+    "Config": {
+      "Labels": {
+        "com.docker.compose.project": "authentic"
+      }
+    },
+    "State": {
+      "Running": false,
+      "Status": "exited"
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "authentic_default": {
+          "NetworkID": "missing-network"
+        }
+      }
+    }
+  }
+]
+""",
+                )
+            return CommandResult(returncode=1, stderr="unexpected command")
+
+    stale = find_stale_compose_containers(DockerRunner(), ("authentic",))
+
+    assert stale == (
+        StaleComposeContainer(
+            container_id="stale-id",
+            name="authentic-seed-migrate-1",
+            project_name="authentic",
+            status="exited",
+            network_ids=("missing-network",),
+            running=False,
+        ),
+    )
+
+
+def test_remove_stopped_stale_compose_containers_skips_running_containers() -> None:
+    class DockerRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            return CommandResult(returncode=0)
+
+    runner = DockerRunner()
+    stopped = StaleComposeContainer(
+        container_id="stopped-id",
+        name="authentic-seed-migrate-1",
+        project_name="authentic",
+        status="exited",
+        network_ids=("missing-network",),
+        running=False,
+    )
+    running = StaleComposeContainer(
+        container_id="running-id",
+        name="authentic-api-1",
+        project_name="authentic",
+        status="running",
+        network_ids=("missing-network",),
+        running=True,
+    )
+
+    removed = remove_stopped_stale_compose_containers(runner, (stopped, running))
+
+    assert removed == (stopped,)
+    assert runner.commands == [
+        CommandSpec(argv=("docker", "rm", "stopped-id")),
+    ]

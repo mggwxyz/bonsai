@@ -1748,6 +1748,89 @@ def test_check_workspace_health_reports_port_conflicts(
     assert any(check.name == "port 4200" and check.status == "fail" for check in report.checks)
 
 
+def test_check_workspace_health_reports_stale_compose_networks(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    class DockerRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[0] == "git" and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[0] == "caddy":
+                return CommandResult(returncode=0, stdout="v2.8.0\n")
+            if argv == ["docker", "network", "ls", "--no-trunc", "--quiet"]:
+                return CommandResult(returncode=0, stdout="live-network\n")
+            if argv[:5] == ["docker", "ps", "--all", "--quiet", "--no-trunc"]:
+                return CommandResult(returncode=0, stdout="stale-id\n")
+            if argv[:2] == ["docker", "inspect"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="""
+[
+  {
+    "Id": "stale-id",
+    "Name": "/authentic-seed-migrate-1",
+    "Config": {
+      "Labels": {
+        "com.docker.compose.project": "authentic"
+      }
+    },
+    "State": {
+      "Running": false,
+      "Status": "exited"
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "authentic_default": {
+          "NetworkID": "missing-network"
+        }
+      }
+    }
+  }
+]
+""",
+                )
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    (default_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    report = check_workspace_health(DockerRunner(), workspace_root)
+
+    assert report.failed is True
+    assert any(
+        check.name == "docker compose networks"
+        and check.status == "fail"
+        and "authentic-seed-migrate-1" in check.detail
+        and check.hint == "Run: bonsai doctor --apply"
+        and check.repair == "docker-compose-networks"
+        for check in report.checks
+    )
+
+
 def test_plan_workspace_ports_classifies_same_worktree_listener_as_owned(
     tmp_path: Path,
     monkeypatch,
@@ -2331,6 +2414,84 @@ def test_execute_doctor_apply_repairs_syncs_and_sets_up_caddy(tmp_path: Path) ->
     assert ("brew", "install", "caddy") in [command.argv for command in runner.commands]
     assert ("brew", "services", "start", "caddy") in [command.argv for command in runner.commands]
     assert load_state(workspace_root / ".bonsai" / "state.json").worktrees == {}
+
+
+def test_execute_doctor_apply_removes_stopped_stale_compose_containers(
+    tmp_path: Path,
+) -> None:
+    class DockerApplyRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv[:2] == ["git", "-C"] and "rev-parse" in argv:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv == ["caddy", "version"]:
+                return CommandResult(returncode=0, stdout="v2.8.0\n")
+            if argv == ["docker", "network", "ls", "--no-trunc", "--quiet"]:
+                return CommandResult(returncode=0, stdout="live-network\n")
+            if argv[:5] == ["docker", "ps", "--all", "--quiet", "--no-trunc"]:
+                return CommandResult(returncode=0, stdout="stale-id\n")
+            if argv[:2] == ["docker", "inspect"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout="""
+[
+  {
+    "Id": "stale-id",
+    "Name": "/authentic-seed-migrate-1",
+    "Config": {
+      "Labels": {
+        "com.docker.compose.project": "authentic"
+      }
+    },
+    "State": {
+      "Running": false,
+      "Status": "exited"
+    },
+    "NetworkSettings": {
+      "Networks": {
+        "authentic_default": {
+          "NetworkID": "missing-network"
+        }
+      }
+    }
+  }
+]
+""",
+                )
+            return CommandResult(returncode=0)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    (default_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    runner = DockerApplyRunner()
+    plan = execute_doctor_apply(runner, workspace_root)
+
+    assert CommandSpec(argv=("docker", "rm", "stale-id")) in runner.commands
+    assert any(
+        action.kind == "docker"
+        and action.detail == "removed authentic-seed-migrate-1 stale Docker network reference"
+        for action in plan.actions
+    )
 
 
 def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) -> None:
