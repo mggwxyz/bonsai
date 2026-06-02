@@ -13,7 +13,7 @@ bonsai doctor
 bonsai doctor --format json
 ```
 
-`doctor` checks workspace state, config, git worktrees, generated files, Caddy files, Caddy availability, and owner-aware configured service port conflicts.
+`doctor` checks workspace state, config, git worktrees, generated files, Caddy files, Caddy availability, stale Docker Compose network references, and owner-aware configured service port conflicts.
 
 Failed repairable checks point to:
 
@@ -21,7 +21,7 @@ Failed repairable checks point to:
 bonsai doctor --apply
 ```
 
-`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
+`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, stopped stale Docker Compose container removal, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
 
 If state points at missing or mis-slotted managed worktrees, preview structural repair first:
 
@@ -45,6 +45,29 @@ bonsai repair-ports --format json
 ```
 
 `repair-ports` proposes the lowest conflict-free slot for affected branch worktrees. A listener whose cwd is inside the matching worktree is treated as expected and does not trigger a slot change. It is a dry run by default; `repair-ports --apply` writes the proposed slots and regenerates Bonsai-managed files.
+
+## Docker Network Not Found
+
+Docker Desktop restarts, daemon resets, or `docker network prune` can leave stopped Compose containers pinned to network IDs that no longer exist. The next setup or migration command may fail with an error like:
+
+```text
+failed to set up container networking: network <network-id> not found
+```
+
+Run:
+
+```bash
+bonsai doctor
+bonsai doctor --format json
+```
+
+If Bonsai finds the issue, the `docker compose networks` check fails with repair `docker-compose-networks` and points to:
+
+```bash
+bonsai doctor --apply
+```
+
+`doctor --apply` removes only stopped Docker Compose containers from Bonsai-managed worktrees whose saved network IDs are missing. It does not remove running containers, Docker networks, named volumes, or database data. The next lifecycle command recreates the removed Compose containers against the current Docker network.
 
 ## Inspect Port Owners
 

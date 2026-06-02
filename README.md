@@ -322,8 +322,10 @@ Bonsai-managed files; use `bonsai repair-ports --format json` for
 machine-readable plans.
 
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
-Caddy files, Caddy availability, and owner-aware configured service port
-conflicts. Use `bonsai doctor --format json` for machine-readable checks and
+Caddy files, Caddy availability, stale Docker Compose network references, and
+owner-aware configured service port conflicts. Use
+`bonsai doctor --format json` for machine-readable checks and
 `bonsai doctor --apply` to run safe workspace repairs: state repair, generated
-file sync, and configured Caddy bootstrap when possible. Structural state drift
-can still be previewed with `bonsai repair`.
+file sync, stopped stale Docker Compose container removal, and configured Caddy
+bootstrap when possible. Structural state drift can still be previewed with
+`bonsai repair`.
