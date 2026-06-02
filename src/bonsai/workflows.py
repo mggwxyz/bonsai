@@ -2554,6 +2554,12 @@ def execute_remove(
             f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
         )
 
+    execute_down(
+        workspace_root,
+        resolved.branch,
+        current_path=default_worktree,
+        terminate_timeout=5.0,
+    )
     execute_stop_processes(
         runner,
         workspace_root,
@@ -2566,7 +2572,7 @@ def execute_remove(
 
     git_remove_worktree(runner, default_worktree, worktree_path, force=force)
     removed_snippets = _remove_generated_snippets(workspace_root, config, resolved.worktree.slug)
-    _remove_worktree_logs(workspace_root, resolved.worktree.slug)
+    removed_logs = _remove_worktree_logs(workspace_root, resolved.worktree.slug)
     updated_state = remove_worktree(state, resolved.branch)
     save_state(state_path, updated_state)
     reload_workspace_caddy(runner, config, workspace_root)
@@ -2576,6 +2582,7 @@ def execute_remove(
         removed_snippets=removed_snippets,
         updated_state=updated_state,
         compose_project_name=compose_project.project_name if compose_project is not None else None,
+        removed_logs=removed_logs,
     )
 
 
