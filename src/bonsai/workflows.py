@@ -159,6 +159,22 @@ def _safe_path_segment(value: str, label: str) -> str:
     return value
 
 
+def global_caddy_paths() -> tuple[Path, Path]:
+    """Return (root Caddyfile, snippets root) under ~/.bonsai."""
+    root = Path.home() / ".bonsai"
+    return root / "Caddyfile", root / "caddy.d"
+
+
+def app_snippets_dir(app_name: str) -> Path:
+    _, snippets_root = global_caddy_paths()
+    return snippets_root / _safe_path_segment(app_name, "workspace name")
+
+
+def _legacy_root_content(snippets_dir: Path) -> str:
+    """The exact content the old per-workspace root Caddyfile used to carry."""
+    return "\n".join(["{", "\tlocal_certs", "}", "", f"import {snippets_dir}/*.caddy", ""])
+
+
 def _check_port_listening(port: int) -> bool:
     import socket
 

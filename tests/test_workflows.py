@@ -35,6 +35,7 @@ from bonsai.process import RecordingRunner
 from bonsai.rendering import render_root_caddyfile
 from bonsai.state import load_state, save_state
 from bonsai.workflows import (
+    app_snippets_dir,
     check_workspace_health,
     command_summary,
     execute_add,
@@ -52,6 +53,7 @@ from bonsai.workflows import (
     execute_stop_processes,
     execute_sync,
     execute_up,
+    global_caddy_paths,
     plan_add_files,
     plan_agent_context,
     plan_clone_workspace,
@@ -280,6 +282,18 @@ def test_caddy_reload_plan_targets_workspace_caddyfile() -> None:
     plan = caddy_reload_plan(Path("/tmp/authentic/Caddyfile"))
 
     assert plan.argv == ("caddy", "reload", "--config", "/tmp/authentic/Caddyfile")
+
+
+def test_global_caddy_paths_resolve_under_home(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    root, snippets = global_caddy_paths()
+    assert root == tmp_path / ".bonsai" / "Caddyfile"
+    assert snippets == tmp_path / ".bonsai" / "caddy.d"
+
+
+def test_app_snippets_dir_is_namespaced_by_app(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+    assert app_snippets_dir("authentic") == tmp_path / ".bonsai" / "caddy.d" / "authentic"
 
 
 def test_plan_clone_workspace_uses_discovered_default_branch(tmp_path: Path) -> None:
