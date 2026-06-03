@@ -48,6 +48,7 @@ from bonsai.models import (
     AppUpPlan,
     BonsaiConfig,
     BonsaiState,
+    CaddySetupResult,
     CheckoutWorktreePlan,
     CleanupItem,
     CleanupPlan,
@@ -166,6 +167,19 @@ def _check_port_listening(port: int) -> bool:
             return True
     except OSError:
         return False
+
+
+_CADDY_HTTPS_PORT = 443
+
+
+def _check_caddy_listening() -> bool:
+    """Probe Caddy's local HTTPS listener.
+
+    A plain socket connect confirms Caddy is accepting connections without
+    performing a TLS handshake, so a missing ``*.localhost`` certificate trust
+    never falsely demotes a healthy Caddy route to its direct port.
+    """
+    return _check_port_listening(_CADDY_HTTPS_PORT)
 
 
 def plan_clone_workspace(
@@ -637,9 +651,9 @@ def _command_available(runner: Runner, argv: list[str]) -> bool:
     return result.returncode == 0
 
 
-def _run_caddy_setup(runner: Runner, config: BonsaiConfig) -> tuple[DoctorApplyAction, ...]:
+def _run_caddy_setup(runner: Runner, config: BonsaiConfig) -> CaddySetupResult:
     if not config.public_services():
-        return ()
+        return CaddySetupResult()
 
     commands = caddy_setup_plan(
         auto_install=config.caddy.auto_install,
@@ -649,9 +663,32 @@ def _run_caddy_setup(runner: Runner, config: BonsaiConfig) -> tuple[DoctorApplyA
     )
     actions: list[DoctorApplyAction] = []
     for command in commands:
-        runner.run(list(command.argv), cwd=command.cwd)
+        result = runner.run(list(command.argv), cwd=command.cwd, check=False)
+        if result.returncode != 0:
+            check = DoctorCheck(
+                name="caddy",
+                status="fail",
+                detail=f"{command_summary(command)} failed ({result.returncode})",
+                hint=(
+                    "Caddy install/start failed - Bonsai will use a direct port URL. "
+                    "Fix later with `brew install caddy` then `bonsai doctor`."
+                ),
+                id="caddy-setup",
+            )
+            return CaddySetupResult(actions=tuple(actions), checks=(check,))
         actions.append(DoctorApplyAction(kind="caddy", detail=command_summary(command)))
-    return tuple(actions)
+    return CaddySetupResult(actions=tuple(actions))
+
+
+def setup_caddy(runner: Runner, workspace_root: Path) -> CaddySetupResult:
+    """Run Caddy install/start for a workspace, loading its config first.
+
+    Thin seam over ``_run_caddy_setup`` for callers that hold a workspace root
+    rather than a loaded ``BonsaiConfig`` (e.g. the guided ``start-here`` flow).
+    """
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    return _run_caddy_setup(runner, config)
 
 
 def _compose_project_names(
@@ -779,7 +816,12 @@ def execute_doctor_apply(runner: Runner, workspace_root: Path) -> DoctorApplyPla
             _compose_project_names(state, workspace_root),
         )
     )
-    actions.extend(_run_caddy_setup(runner, config))
+    caddy_result = _run_caddy_setup(runner, config)
+    actions.extend(caddy_result.actions)
+    actions.extend(
+        DoctorApplyAction(kind="caddy", detail=check.detail)
+        for check in caddy_result.checks
+    )
 
     sync_preview = plan_sync(workspace_root)
     if sync_preview.actions:
@@ -1794,6 +1836,48 @@ def _plan_service_open_url(
         service_name=service.name,
         port=service.base_port + worktree.slot,
     )
+
+
+def _port_open_plan(plan: OpenUrlPlan) -> OpenUrlPlan:
+    return OpenUrlPlan(
+        branch=plan.branch,
+        worktree_path=plan.worktree_path,
+        url=f"http://localhost:{plan.port}",
+        service_name=plan.service_name,
+        port=plan.port,
+        via="port",
+    )
+
+
+def resolve_open_target(plan: OpenUrlPlan) -> OpenUrlPlan:
+    """Choose between the Caddy route and the direct port for an open target.
+
+    Runner-free, probe-driven, and opt-in: only the open/wizard flow calls this.
+    ``bonsai urls`` keeps using the plain Caddy ``OpenUrlPlan`` so its output is
+    unaffected. When Caddy's HTTPS listener is up the existing
+    ``https://…localhost`` URL is kept (``via="caddy"``). When Caddy is down but
+    the app port is live the plan is demoted to ``http://localhost:<port>``
+    (``via="port"``). When neither responds the Caddy plan is returned unchanged
+    so the caller's liveness gate can report the dead route.
+    """
+    if _check_caddy_listening():
+        return plan
+    if _check_port_listening(plan.port):
+        return _port_open_plan(plan)
+    return plan
+
+
+def url_liveness_ok(plan: OpenUrlPlan) -> bool:
+    """Confirm the chosen open target is actually reachable.
+
+    Runner-free. The Caddy plan requires BOTH Caddy's HTTPS listener AND the
+    app's own backend port (the port Caddy reverse-proxies to) to be live, so a
+    persistent Caddy service can never greenlight a dead app. The port plan is
+    gated on the app port alone; the port probe never greenlights the Caddy URL.
+    """
+    if plan.via == "caddy":
+        return _check_caddy_listening() and _check_port_listening(plan.port)
+    return _check_port_listening(plan.port)
 
 
 def plan_open_url(

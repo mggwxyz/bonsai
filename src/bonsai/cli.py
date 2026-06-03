@@ -3,9 +3,9 @@ import shlex
 import shutil
 import subprocess
 import webbrowser
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
@@ -21,17 +21,11 @@ from bonsai.command_results import (
     render_stop_result,
     render_sync_result,
 )
-from bonsai.config import load_config
-from bonsai.doctor import render_doctor_json, validate_doctor_format
+from bonsai.doctor import preflight_report, render_doctor_json, validate_doctor_format
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.models import OpenUrlPlan
-from bonsai.onboarding import (
-    ProjectDefaults,
-    StarterConfig,
-    detect_project_defaults,
-    write_starter_config,
-)
+from bonsai.onboarding import write_guided_config as onboarding_write_guided_config
 from bonsai.port_repair import render_port_repair_json, validate_port_repair_format
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
@@ -68,6 +62,9 @@ from bonsai.workflows import (
     plan_workspace_summary,
     plan_workspace_urls,
     repo_config_path,
+    resolve_open_target,
+    setup_caddy,
+    url_liveness_ok,
     workspace_config_path,
     worktree_name_completions,
 )
@@ -122,6 +119,36 @@ ZSH_INTEGRATION_BLOCK = (
     'eval "$(bonsai shell-init zsh)"\n'
     f"{SHELL_INTEGRATION_END}\n"
 )
+
+
+def ensure_shell_integration(
+    home: Path,
+    shell: str,
+    *,
+    offer: Callable[[], bool],
+) -> Literal["installed", "already", "manual"]:
+    """Install zsh integration without raising; never strands a guided run."""
+    if shell != "zsh":
+        return "manual"
+    zshrc = home / ".zshrc"
+    existing = zshrc.read_text(encoding="utf-8") if zshrc.exists() else ""
+    if SHELL_INTEGRATION_START in existing:
+        return "already"
+    if not offer():
+        return "manual"
+
+    backup = home / ".zshrc.bonsai.bak"
+    backup.parent.mkdir(parents=True, exist_ok=True)
+    backup.write_text(existing, encoding="utf-8")
+
+    content = existing
+    if content and not content.endswith("\n"):
+        content += "\n"
+    if content and not content.endswith("\n\n"):
+        content += "\n"
+    content += ZSH_INTEGRATION_BLOCK
+    zshrc.write_text(content, encoding="utf-8")
+    return "installed"
 
 
 def _version_callback(value: bool) -> None:
@@ -255,10 +282,22 @@ def _open_editor(worktree_path: Path) -> None:
         )
 
 
+def _print_resolved_url(plan: OpenUrlPlan) -> None:
+    label = "Caddy route" if plan.via == "caddy" else f"port localhost:{plan.port}"
+    console.print(f"{plan.url} ({label})")
+
+
 def _open_url(plan: OpenUrlPlan) -> None:
-    if not webbrowser.open(plan.url):
-        raise BonsaiWorkspaceError(f"Failed to open URL: {plan.url}")
-    console.print(f"Opened {plan.url}")
+    target = resolve_open_target(plan)
+    if not url_liveness_ok(target):
+        console.print(
+            f"The app isn't responding on localhost:{target.port} yet — "
+            f"run `bonsai up {target.branch}` then `bonsai open {target.branch}`."
+        )
+        raise typer.Exit(code=1)
+    if not webbrowser.open(target.url):
+        raise BonsaiWorkspaceError(f"Failed to open URL: {target.url}")
+    console.print(f"Opened {target.url}")
 
 
 def _open_primary_url(workspace_root: Path, name: str) -> None:
@@ -270,34 +309,6 @@ def _optional_prompt(label: str, default: str | None) -> str | None:
     return value or None
 
 
-def _prompt_starter_config(defaults: ProjectDefaults) -> StarterConfig:
-    app_name = typer.prompt("App name", default=defaults.app_name).strip()
-    base_branch = typer.prompt("Base branch", default=defaults.base_branch).strip()
-    install_command = _optional_prompt("Install command", defaults.install_command)
-    setup_command = _optional_prompt("Setup command", defaults.setup_command)
-    start_command = _optional_prompt("Start command", defaults.start_command)
-    symlink_env = typer.confirm(
-        "Symlink .env into each worktree",
-        default=defaults.has_env_file,
-    )
-    service_name = typer.prompt("Primary service name", default=defaults.service_name).strip()
-    port_env = typer.prompt("Port environment variable", default=defaults.port_env).strip()
-    base_port = typer.prompt("Base port", default=defaults.base_port, type=int)
-    url = typer.prompt("Local URL template", default=defaults.url).strip()
-    return StarterConfig(
-        name=app_name,
-        base_branch=base_branch,
-        install_command=install_command,
-        setup_command=setup_command,
-        start_command=start_command,
-        symlink_env=symlink_env,
-        service_name=service_name,
-        port_env=port_env,
-        base_port=base_port,
-        url=url,
-    )
-
-
 def write_guided_config(
     config_path: Path,
     repo_path: Path,
@@ -305,14 +316,16 @@ def write_guided_config(
     base_branch: str,
     force: bool = False,
 ) -> Path:
-    if config_path.exists() and not force:
-        raise BonsaiConfigError(f".bonsai.toml already exists at {config_path}")
-    defaults = detect_project_defaults(repo_path, fallback_name, base_branch)
-    config = _prompt_starter_config(defaults)
-    config_path.parent.mkdir(parents=True, exist_ok=True)
-    path = write_starter_config(config_path, config)
-    load_config(path)
-    return path
+    return onboarding_write_guided_config(
+        config_path=config_path,
+        repo_path=repo_path,
+        fallback_name=fallback_name,
+        base_branch=base_branch,
+        force=force,
+        ask=typer.prompt,
+        confirm=typer.confirm,
+        ask_optional=_optional_prompt,
+    )
 
 
 def _guided_config_initializer(
@@ -358,6 +371,107 @@ def clone(
         )
         console.print(f"Created workspace: {plan.workspace_root}")
         console.print(f"Default worktree: {plan.default_worktree}")
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+def _preflight_check_failed(report, check_id: str) -> bool:
+    return any(
+        check.id == check_id and check.status == "fail" for check in report.checks
+    )
+
+
+@app.command("start-here")
+def start_here(
+    git_url: str,
+    name: str,
+    branch: Annotated[
+        str | None,
+        typer.Option("--branch", help="Branch to prepare as the first worktree."),
+    ] = None,
+    shell: Annotated[
+        str,
+        typer.Option("--shell", help="Shell to offer integration for."),
+    ] = "zsh",
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Run guided prompts and gate the final URL on a liveness probe. "
+            "Use --no-interactive for a scripted run that prints the resolved URL.",
+        ),
+    ] = True,
+) -> None:
+    """Guide a newcomer from clone to a running app in one sequenced flow."""
+    try:
+        runner = SubprocessRunner()
+        home = Path.home()
+
+        report = preflight_report(runner, Path.cwd(), home)
+        _print_command_result(render_doctor_result(report, apply=False))
+        if _preflight_check_failed(report, "git"):
+            console.print(
+                "git is required. Run `brew install git`, then re-run "
+                f"`bonsai start-here {git_url} {name}`."
+            )
+            raise typer.Exit(code=1)
+        if _preflight_check_failed(report, "caddy"):
+            console.print(
+                "Caddy missing — using a port URL. Optional: `brew install caddy`."
+            )
+        if _preflight_check_failed(report, "docker"):
+            console.print(
+                "Docker missing for this compose repo. Start Docker Desktop, then "
+                f"re-run `bonsai start-here {git_url} {name}`."
+            )
+            raise typer.Exit(code=1)
+
+        config_initializer = _guided_config_initializer if interactive else None
+        plan = execute_clone(
+            runner,
+            git_url,
+            name,
+            Path.cwd(),
+            config_initializer=config_initializer,
+        )
+        console.print(f"Created workspace: {plan.workspace_root}")
+        console.print(f"Default worktree: {plan.default_worktree}")
+        workspace_root = plan.workspace_root
+
+        offer = typer.confirm if interactive else (lambda: False)
+        shell_result = ensure_shell_integration(home, shell, offer=offer)
+        if shell_result == "installed":
+            console.print(f"Installed {shell} integration in {home / '.zshrc'}")
+        elif shell_result == "already":
+            console.print(f"{shell} integration already installed")
+        else:
+            console.print(
+                f'Shell integration skipped. Run `bonsai install-shell {shell}`, '
+                'open a new shell, then re-run — or add '
+                'eval "$(bonsai shell-init zsh)" to your shell config.'
+            )
+
+        worktree_branch = branch or plan.state.default_branch
+        add_plan = execute_add(runner, worktree_branch, workspace_root)
+        console.print(f"Prepared worktree: {add_plan.worktree_path}")
+        console.print(f"Port slot: {add_plan.slot}")
+
+        caddy_result = setup_caddy(runner, workspace_root)
+        for check in caddy_result.checks:
+            console.print(check.hint or check.detail)
+
+        open_plan = plan_open_url_for_worktree(workspace_root, worktree_branch)
+        target = resolve_open_target(open_plan)
+        if not interactive:
+            _print_resolved_url(target)
+            return
+        if url_liveness_ok(target):
+            console.print(f"✅ done — your app is at {target.url}")
+        else:
+            console.print(
+                f"The app isn't responding on localhost:{target.port} yet — "
+                f"run `bonsai up {target.branch}` then `bonsai open {target.branch}`."
+            )
     except BonsaiError as exc:
         _fail(exc)
 
@@ -553,6 +667,14 @@ def open_command(
         str | None,
         typer.Option("--service", help="Open a specific public service URL."),
     ] = None,
+    interactive: Annotated[
+        bool,
+        typer.Option(
+            "--interactive/--no-interactive",
+            help="Launch a browser after confirming the URL responds. "
+            "Use --no-interactive to print the resolved URL without probing.",
+        ),
+    ] = True,
 ) -> None:
     """Open a worktree's primary local URL."""
     try:
@@ -561,7 +683,10 @@ def open_command(
             plan = plan_open_url(root_path, Path.cwd(), service_name=service)
         else:
             plan = plan_open_url_for_worktree(root_path, name, service_name=service)
-        _open_url(plan)
+        if interactive:
+            _open_url(plan)
+        else:
+            _print_resolved_url(resolve_open_target(plan))
     except BonsaiError as exc:
         _fail(exc)
 
@@ -633,22 +758,12 @@ def install_shell(shell: str) -> None:
     try:
         if shell != "zsh":
             raise BonsaiConfigError(f"Unsupported shell: {shell}")
-        zshrc = Path.home() / ".zshrc"
-        existing = zshrc.read_text(encoding="utf-8") if zshrc.exists() else ""
-        if SHELL_INTEGRATION_START in existing:
+        home = Path.home()
+        result = ensure_shell_integration(home, shell, offer=lambda: True)
+        if result == "already":
             console.print("zsh integration already installed")
-            return
-
-        content = existing
-        if content and not content.endswith("\n"):
-            content += "\n"
-        if content and not content.endswith("\n\n"):
-            content += "\n"
-        content += ZSH_INTEGRATION_BLOCK
-
-        zshrc.parent.mkdir(parents=True, exist_ok=True)
-        zshrc.write_text(content, encoding="utf-8")
-        console.print(f"Installed zsh integration in {zshrc}")
+        else:
+            console.print(f"Installed zsh integration in {home / '.zshrc'}")
     except BonsaiError as exc:
         _fail(exc)
 
@@ -992,10 +1107,25 @@ def doctor(
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
     apply: bool = typer.Option(False, "--apply", help="Apply safe workspace repairs."),
+    preflight: bool = typer.Option(
+        False,
+        "--preflight",
+        help="Check first-run prerequisites without a workspace.",
+    ),
 ) -> None:
     """Check workspace health and report repair hints."""
     try:
         output_format = validate_doctor_format(output_format)
+        if preflight:
+            repo_path = Path.cwd()
+            report = preflight_report(SubprocessRunner(), repo_path)
+            if output_format == "json":
+                typer.echo(render_doctor_json(report, repo_path), nl=False)
+            else:
+                _print_command_result(render_doctor_result(report, apply=False))
+            if report.failed:
+                raise typer.Exit(code=1)
+            return
         root_path = find_workspace_root(Path.cwd())
         apply_plan = None
         runner = SubprocessRunner()

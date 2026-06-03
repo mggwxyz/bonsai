@@ -26,6 +26,7 @@ from bonsai.models import (
     CommandSpec,
     FileWrite,
     ManagedWorktree,
+    OpenUrlPlan,
     PortOwner,
     SharedFileConfig,
 )
@@ -65,8 +66,10 @@ from bonsai.workflows import (
     plan_workspace_ports,
     plan_workspace_summary,
     plan_workspace_urls,
+    resolve_open_target,
     resolve_start_target,
     run_lifecycle_command,
+    url_liveness_ok,
     worktree_name_completions,
     write_files,
 )
@@ -2416,6 +2419,74 @@ def test_execute_doctor_apply_repairs_syncs_and_sets_up_caddy(tmp_path: Path) ->
     assert load_state(workspace_root / ".bonsai" / "state.json").worktrees == {}
 
 
+def _caddy_setup_config(tmp_path: Path) -> object:
+    config_path = write_config(tmp_path, VALID_CONFIG)
+    return load_config(config_path)
+
+
+class _CaddySetupRunner(RecordingRunner):
+    def __init__(self, fail_argv: tuple[str, ...] | None = None) -> None:
+        super().__init__()
+        self.fail_argv = fail_argv
+
+    def run(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+        if argv == ["caddy", "version"]:
+            return CommandResult(returncode=1, stderr="missing caddy\n")
+        if argv == ["brew", "--version"]:
+            return CommandResult(returncode=0, stdout="Homebrew 4.0\n")
+        if self.fail_argv is not None and tuple(argv) == self.fail_argv:
+            return CommandResult(returncode=1, stderr="brew failed\n")
+        return CommandResult(returncode=0)
+
+
+def test_run_caddy_setup_brew_install_failure_is_non_fatal(tmp_path: Path) -> None:
+    config = _caddy_setup_config(tmp_path)
+    runner = _CaddySetupRunner(fail_argv=("brew", "install", "caddy"))
+
+    result = workflows._run_caddy_setup(runner, config)
+
+    assert result.actions == ()
+    assert [check.status for check in result.checks] == ["fail"]
+    assert result.checks[0].hint and "brew install caddy" in result.checks[0].hint
+    assert ("brew", "install", "caddy") in [command.argv for command in runner.commands]
+    assert ("brew", "services", "start", "caddy") not in [
+        command.argv for command in runner.commands
+    ]
+
+
+def test_run_caddy_setup_brew_start_failure_is_non_fatal(tmp_path: Path) -> None:
+    config = _caddy_setup_config(tmp_path)
+    runner = _CaddySetupRunner(fail_argv=("brew", "services", "start", "caddy"))
+
+    result = workflows._run_caddy_setup(runner, config)
+
+    assert [action.kind for action in result.actions] == ["caddy"]
+    assert result.actions[0].detail == "brew install caddy"
+    assert [check.status for check in result.checks] == ["fail"]
+    assert result.checks[0].hint and "brew install caddy" in result.checks[0].hint
+
+
+def test_run_caddy_setup_success_returns_actions_unchanged(tmp_path: Path) -> None:
+    config = _caddy_setup_config(tmp_path)
+    runner = _CaddySetupRunner()
+
+    result = workflows._run_caddy_setup(runner, config)
+
+    assert [action.kind for action in result.actions] == ["caddy", "caddy"]
+    assert [action.detail for action in result.actions] == [
+        "brew install caddy",
+        "brew services start caddy",
+    ]
+    assert result.checks == ()
+
+
 def test_execute_doctor_apply_removes_stopped_stale_compose_containers(
     tmp_path: Path,
 ) -> None:
@@ -2530,6 +2601,97 @@ def test_plan_open_url_renders_primary_url_for_current_worktree(tmp_path: Path) 
     assert plan.branch == "MB-2036-multi-worktree-port-slots"
     assert plan.worktree_path == branch_worktree
     assert plan.url == "https://mb-2036-multi-worktree-port-slots-4202.authentic.localhost"
+    assert plan.via == "caddy"
+
+
+def _caddy_open_plan() -> OpenUrlPlan:
+    return OpenUrlPlan(
+        branch="feature",
+        worktree_path=Path("/ws/feature"),
+        url="https://feature.authentic.localhost",
+        service_name="frontend",
+        port=4201,
+    )
+
+
+def test_resolve_open_target_keeps_caddy_when_caddy_listener_up(monkeypatch) -> None:
+    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(
+        workflows,
+        "_check_port_listening",
+        lambda _port: pytest.fail("port probe must not gate the Caddy route"),
+    )
+
+    resolved = resolve_open_target(_caddy_open_plan())
+
+    assert resolved.via == "caddy"
+    assert resolved.url == "https://feature.authentic.localhost"
+
+
+def test_resolve_open_target_demotes_to_port_when_caddy_down(monkeypatch) -> None:
+    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: False)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+
+    resolved = resolve_open_target(_caddy_open_plan())
+
+    assert resolved.via == "port"
+    assert resolved.url == "http://localhost:4201"
+    assert resolved.port == 4201
+
+
+def test_resolve_open_target_keeps_caddy_plan_when_nothing_responds(monkeypatch) -> None:
+    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: False)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+
+    resolved = resolve_open_target(_caddy_open_plan())
+
+    assert resolved.via == "caddy"
+    assert resolved.url == "https://feature.authentic.localhost"
+
+
+def test_url_liveness_ok_caddy_requires_listener_and_app_port(monkeypatch) -> None:
+    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+
+    assert url_liveness_ok(_caddy_open_plan()) is True
+
+
+def test_url_liveness_ok_caddy_is_false_when_app_port_dead(monkeypatch) -> None:
+    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+
+    assert url_liveness_ok(_caddy_open_plan()) is False
+
+
+def test_url_liveness_ok_port_uses_port_probe(monkeypatch) -> None:
+    port_plan = OpenUrlPlan(
+        branch="feature",
+        worktree_path=Path("/ws/feature"),
+        url="http://localhost:4201",
+        service_name="frontend",
+        port=4201,
+        via="port",
+    )
+    monkeypatch.setattr(
+        workflows,
+        "_check_caddy_listening",
+        lambda: pytest.fail("port liveness must not consult the Caddy probe"),
+    )
+    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+
+    assert url_liveness_ok(port_plan) is True
+
+
+def test_open_url_plan_defaults_to_caddy_via() -> None:
+    plan = OpenUrlPlan(
+        branch="feature",
+        worktree_path=Path("/ws/feature"),
+        url="https://feature.authentic.localhost",
+        service_name="frontend",
+        port=4201,
+    )
+
+    assert plan.via == "caddy"
 
 
 def test_plan_open_url_rejects_directory_outside_worktree(tmp_path: Path) -> None:
@@ -5035,6 +5197,11 @@ def test_plan_workspace_urls_reports_route_tls_and_app_diagnostics(
         ),
     )
     monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(
+        workflows,
+        "_check_caddy_listening",
+        lambda: pytest.fail("`urls` must not probe Caddy or demote to the port URL"),
+    )
 
     plan = plan_workspace_urls(UrlRunner(), workspace_root, name="feature", service_name="frontend")
 
@@ -5044,6 +5211,7 @@ def test_plan_workspace_urls_reports_route_tls_and_app_diagnostics(
     assert item.service_name == "frontend"
     assert item.port == 4201
     assert item.url == "https://feature.authentic.localhost"
+    assert not item.url.startswith("http://localhost")
     assert item.caddy_snippet_path == workspace_root / "caddy.d" / "feature-frontend.caddy"
     checks = {check.name: check for check in item.checks}
     assert checks["root Caddyfile"].status == "fail"

@@ -2,6 +2,58 @@
 
 Bonsai is a macOS-first CLI for managing parallel local development workspaces with git worktrees, unique ports, generated `.env.local` files, and Caddy HTTPS URLs.
 
+## Start here (5-minute first run)
+
+### Prerequisites
+
+macOS with Homebrew, git, and zsh. Run this to check before you start — it reports anything missing along with the fix:
+
+```bash
+bonsai doctor --preflight
+```
+
+### The one command
+
+```bash
+bonsai start-here <git-url> <name>
+```
+
+`<name>` becomes the workspace folder (e.g. `my-app`). Concrete example:
+
+```bash
+bonsai start-here git@github.com:org/my-app.git my-app
+```
+
+This runs preflight checks, clones the repo, guides you through config, offers shell integration, creates your first worktree, starts Caddy (or falls back to a direct port), and opens the app.
+
+### What you'll be asked
+
+**Guided config prompts** — Bonsai auto-detects your stack (Node/Python/Go/Rails/Docker Compose, etc.) and pre-fills what it can. You'll only be asked about values it can't infer:
+
+- **Start command** — the command that runs your dev server (e.g. `npm dev`)
+- **Port** — the port your app listens on
+- **URL** — the local URL template (`https://${slug}.my-app.localhost` for Caddy, or left blank to use the port directly)
+
+**Shell integration offer** — asked once per machine. Accepting appends `eval "$(bonsai shell-init zsh)"` to `~/.zshrc`. After that you need to open a new shell (or `source ~/.zshrc`) before `bonsai checkout <branch>` can cd into a worktree.
+
+### What success looks like
+
+```
+✅ done — your app is at <url>
+```
+
+The URL is either a Caddy HTTPS URL (`https://<slug>.<app>.localhost`) or a direct port URL (`http://localhost:<port>`) when Caddy isn't installed — both are expected and work fine.
+
+### If something's missing
+
+- **git not found** — `brew install git`, then re-run `bonsai start-here`
+- **Shell integration skipped** — `bonsai install-shell zsh`, open a new shell, then `bonsai checkout <branch>` to cd in
+- **App not up yet** — `bonsai up <branch>` to start it in the background, then `bonsai open <branch>` to open the URL
+
+Prefer the manual steps? `clone` → `init` → `add` → `open`.
+
+---
+
 ## What Bonsai Manages
 
 - A workspace root with one default worktree and any number of managed branch worktrees.

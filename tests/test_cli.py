@@ -13,8 +13,17 @@ from typer.main import get_command
 from typer.testing import CliRunner
 
 from bonsai import cli
+from bonsai.config import load_config
 from bonsai.errors import BonsaiWorkspaceError
-from bonsai.models import BonsaiState, ManagedWorktree, PortOwner
+from bonsai.models import (
+    BonsaiState,
+    CaddySetupResult,
+    DoctorCheck,
+    DoctorReport,
+    ManagedWorktree,
+    OpenUrlPlan,
+    PortOwner,
+)
 from bonsai.state import save_state
 
 runner = CliRunner()
@@ -54,6 +63,7 @@ def test_help_lists_core_commands() -> None:
 
     assert result.exit_code == 0
     assert "clone" in result.stdout
+    assert "start-here" in result.stdout
     assert "add" in result.stdout
     assert "remove" in result.stdout
     assert "move" in result.stdout
@@ -715,9 +725,16 @@ def test_open_primary_url_uses_named_url_plan(monkeypatch, tmp_path: Path) -> No
     calls = []
     workspace_root = tmp_path / "bonsai-authentic"
 
+    plan = SimpleNamespace(
+        url="https://feature.authentic.localhost",
+        port=4201,
+        via="caddy",
+        branch="feature",
+    )
+
     def fake_plan_open_url_for_worktree(root: Path, name: str):
         calls.append(("plan", root, name))
-        return SimpleNamespace(url="https://feature.authentic.localhost")
+        return plan
 
     monkeypatch.setattr(
         cli,
@@ -725,6 +742,8 @@ def test_open_primary_url_uses_named_url_plan(monkeypatch, tmp_path: Path) -> No
         fake_plan_open_url_for_worktree,
         raising=False,
     )
+    monkeypatch.setattr(cli, "resolve_open_target", lambda value: value, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _value: True, raising=False)
     monkeypatch.setattr(
         cli.webbrowser,
         "open",
@@ -967,6 +986,8 @@ url = "https://${slug}.authentic.localhost"
     )
     opened_urls: list[str] = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
     monkeypatch.chdir(tmp_path / "ma-123-test")
 
     result = runner.invoke(cli.app, ["open"])
@@ -995,6 +1016,8 @@ url = "https://${slug}.authentic.localhost"
     )
     opened_urls: list[str] = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
     monkeypatch.chdir(tmp_path / "main")
 
     result = runner.invoke(cli.app, ["open", "ma-123-test"])
@@ -1029,6 +1052,8 @@ url = "https://api-${slug}.authentic.localhost"
     )
     opened_urls: list[str] = []
     monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
     monkeypatch.chdir(tmp_path / "main")
 
     result = runner.invoke(cli.app, ["open", "ma-123-test", "--service", "api"])
@@ -1036,6 +1061,93 @@ url = "https://api-${slug}.authentic.localhost"
     assert result.exit_code == 0
     assert opened_urls == ["https://api-ma-123-test.authentic.localhost"]
     assert "Opened https://api-ma-123-test.authentic.localhost" in result.stdout
+
+
+def _write_primary_open_workspace(tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    config_path = tmp_path / "main" / ".bonsai.toml"
+    config_path.write_text(
+        """
+name = "authentic"
+base_branch = "main"
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+""",
+        encoding="utf-8",
+    )
+
+
+def test_open_demotes_to_port_url_when_caddy_down(monkeypatch, tmp_path: Path) -> None:
+    _write_primary_open_workspace(tmp_path)
+    opened_urls: list[str] = []
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+
+    def fake_resolve(plan):
+        return SimpleNamespace(
+            url=f"http://localhost:{plan.port}",
+            port=plan.port,
+            via="port",
+            branch=plan.branch,
+        )
+
+    monkeypatch.setattr(cli, "resolve_open_target", fake_resolve, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open"])
+
+    assert result.exit_code == 0
+    assert opened_urls == ["http://localhost:4201"]
+    assert "Opened http://localhost:4201" in result.stdout
+    assert "authentic.localhost" not in result.stdout
+
+
+def test_open_does_not_report_success_when_url_is_dead(monkeypatch, tmp_path: Path) -> None:
+    _write_primary_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("browser must not open when the URL is dead")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: False, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open"])
+
+    assert result.exit_code == 1
+    assert "Opened" not in result.stdout
+    assert "localhost:4201" in result.stdout
+    assert "bonsai up MA-123-test" in result.stdout
+    assert "bonsai open MA-123-test" in result.stdout
+
+
+def test_open_no_interactive_prints_labeled_url_without_probing(
+    monkeypatch, tmp_path: Path
+) -> None:
+    _write_primary_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("--no-interactive must not open a browser")
+
+    def fail_liveness(_plan):
+        raise AssertionError("--no-interactive must not gate on a liveness probe")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open", "--no-interactive"])
+
+    assert result.exit_code == 0
+    assert "Opened" not in result.stdout
+    assert "https://ma-123-test.authentic.localhost (Caddy route)" in result.stdout
 
 
 def test_complete_worktree_names_returns_matching_aliases(
@@ -1297,6 +1409,81 @@ def test_install_shell_zsh_is_idempotent(monkeypatch, tmp_path: Path) -> None:
     text = (tmp_path / ".zshrc").read_text(encoding="utf-8")
     assert text.count("# >>> bonsai shell integration >>>") == 1
     assert text.count('eval "$(bonsai shell-init zsh)"') == 1
+
+
+def test_ensure_shell_integration_installs_on_empty_zshrc(tmp_path: Path) -> None:
+    result = cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: True)
+
+    assert result == "installed"
+    text = (tmp_path / ".zshrc").read_text(encoding="utf-8")
+    assert text.count("# >>> bonsai shell integration >>>") == 1
+    assert text.count('eval "$(bonsai shell-init zsh)"') == 1
+
+
+def test_ensure_shell_integration_already_present_skips_backup(tmp_path: Path) -> None:
+    cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: True)
+    backups_before = len(list(tmp_path.glob(".zshrc.bonsai*.bak")))
+
+    result = cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: True)
+
+    assert result == "already"
+    text = (tmp_path / ".zshrc").read_text(encoding="utf-8")
+    assert text.count("# >>> bonsai shell integration >>>") == 1
+    backups_after = len(list(tmp_path.glob(".zshrc.bonsai*.bak")))
+    assert backups_after == backups_before
+
+
+def test_ensure_shell_integration_backs_up_pre_append_contents(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# existing config\n", encoding="utf-8")
+
+    cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: True)
+
+    backups = list(tmp_path.glob(".zshrc.bonsai*.bak"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "# existing config\n"
+
+
+def test_ensure_shell_integration_declined_makes_no_changes(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# existing config\n", encoding="utf-8")
+
+    result = cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: False)
+
+    assert result == "manual"
+    assert zshrc.read_text(encoding="utf-8") == "# existing config\n"
+    assert list(tmp_path.glob(".zshrc.bonsai*.bak")) == []
+
+
+@pytest.mark.parametrize("shell", ["fish", "bash"])
+def test_ensure_shell_integration_non_zsh_returns_manual_without_raising(
+    tmp_path: Path, shell: str
+) -> None:
+    result = cli.ensure_shell_integration(tmp_path, shell, offer=lambda: True)
+
+    assert result == "manual"
+    assert not (tmp_path / ".zshrc").exists()
+    assert list(tmp_path.glob(".zshrc.bonsai*.bak")) == []
+
+
+def test_install_shell_non_zsh_still_raises(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
+
+    result = runner.invoke(cli.app, ["install-shell", "fish"])
+
+    assert result.exit_code == 1
+    assert "Unsupported shell: fish" in result.stdout
+
+
+def test_ensure_shell_integration_preserves_trailing_newline(tmp_path: Path) -> None:
+    zshrc = tmp_path / ".zshrc"
+    zshrc.write_text("# existing config", encoding="utf-8")
+
+    cli.ensure_shell_integration(tmp_path, "zsh", offer=lambda: True)
+
+    text = zshrc.read_text(encoding="utf-8")
+    assert text.startswith("# existing config\n\n")
+    assert text.endswith(cli.ZSH_INTEGRATION_BLOCK)
 
 
 def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkeypatch) -> None:
@@ -2461,3 +2648,205 @@ def test_doctor_exits_zero_when_checks_pass(monkeypatch, tmp_path: Path) -> None
     assert result.exit_code == 0
     assert "config" in result.stdout
     assert "loaded" in result.stdout
+
+
+_NON_NPM_CONFIG = """
+name = "authentic"
+base_branch = "main"
+
+[caddy]
+auto_install = true
+auto_start = true
+root_caddyfile = "Caddyfile"
+snippets_dir = "caddy.d"
+
+[commands]
+install = "poetry install"
+start = "poetry run dev"
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+"""
+
+
+def _install_start_here_fakes(monkeypatch, tmp_path: Path, *, live: bool) -> dict:
+    """Wire fakes so `start-here` exercises its sequence with no real IO."""
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    workspace_root = parent / "bonsai-authentic"
+    default_worktree = workspace_root / "main"
+    config_path = default_worktree / ".bonsai.toml"
+    calls: list[str] = []
+    record: dict = {"config_path": config_path, "workspace_root": workspace_root}
+
+    def fake_preflight_report(_runner, _repo_path=None, _home=None):
+        calls.append("preflight")
+        return DoctorReport(
+            checks=(
+                DoctorCheck("git", "ok", "git is available", id="git"),
+                DoctorCheck("caddy", "ok", "caddy is available", id="caddy"),
+            )
+        )
+
+    def fake_execute_clone(_runner, _git_url, _name, _parent, config_initializer=None):
+        calls.append("clone")
+        record["config_initializer"] = config_initializer
+        config_path.parent.mkdir(parents=True, exist_ok=True)
+        config_path.write_text(_NON_NPM_CONFIG, encoding="utf-8")
+        state = BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={},
+        )
+        return SimpleNamespace(
+            workspace_root=workspace_root,
+            default_worktree=default_worktree,
+            state=state,
+        )
+
+    def fake_ensure_shell_integration(_home, _shell, *, offer):
+        calls.append("shell")
+        record["offer"] = offer
+        return "installed"
+
+    def fake_execute_add(_runner, branch, root):
+        calls.append("add")
+        record["add_branch"] = branch
+        record["add_root"] = root
+        return SimpleNamespace(worktree_path=root / "main", slot=0)
+
+    def fake_setup_caddy(_runner, _workspace_root):
+        calls.append("caddy")
+        return CaddySetupResult()
+
+    def fake_plan_open_url_for_worktree(_root, _name, service_name=None):
+        return OpenUrlPlan(
+            branch="main",
+            worktree_path=default_worktree,
+            url="https://main.authentic.localhost",
+            service_name="frontend",
+            port=4200,
+        )
+
+    monkeypatch.setattr(cli, "SubprocessRunner", lambda: SimpleNamespace(), raising=False)
+    monkeypatch.setattr(cli, "preflight_report", fake_preflight_report, raising=False)
+    monkeypatch.setattr(cli, "execute_clone", fake_execute_clone, raising=False)
+    monkeypatch.setattr(
+        cli, "ensure_shell_integration", fake_ensure_shell_integration, raising=False
+    )
+    monkeypatch.setattr(cli, "execute_add", fake_execute_add, raising=False)
+    monkeypatch.setattr(cli, "setup_caddy", fake_setup_caddy, raising=False)
+    monkeypatch.setattr(
+        cli, "plan_open_url_for_worktree", fake_plan_open_url_for_worktree, raising=False
+    )
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: live, raising=False)
+    monkeypatch.chdir(parent)
+    record["calls"] = calls
+    return record
+
+
+def test_start_here_reports_live_payoff(monkeypatch, tmp_path: Path) -> None:
+    record = _install_start_here_fakes(monkeypatch, tmp_path, live=True)
+
+    result = runner.invoke(
+        cli.app,
+        ["start-here", "https://github.com/org/authentic", "bonsai-authentic"],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    calls = record["calls"]
+    assert calls == ["preflight", "clone", "shell", "add", "caddy"]
+    assert calls.index("preflight") < calls.index("clone")
+    assert "Bonsai doctor" in result.stdout
+    assert result.stdout.index("Bonsai doctor") < result.stdout.index("Created workspace")
+    assert callable(record["config_initializer"])
+    loaded = load_config(record["config_path"])
+    assert loaded.name == "authentic"
+    assert callable(record["offer"])
+    assert "✅ done — your app is at https://main.authentic.localhost" in result.stdout
+
+
+def test_start_here_omits_payoff_when_app_is_dead(monkeypatch, tmp_path: Path) -> None:
+    record = _install_start_here_fakes(monkeypatch, tmp_path, live=False)
+
+    result = runner.invoke(
+        cli.app,
+        ["start-here", "https://github.com/org/authentic", "bonsai-authentic"],
+        input="y\n",
+    )
+
+    assert result.exit_code == 0
+    assert "✅ done" not in result.stdout
+    assert "bonsai up main" in result.stdout
+    assert "bonsai open main" in result.stdout
+    loaded = load_config(record["config_path"])
+    assert loaded.name == "authentic"
+
+
+def test_start_here_scripted_prints_url_without_liveness_gate(
+    monkeypatch, tmp_path: Path
+) -> None:
+    record = _install_start_here_fakes(monkeypatch, tmp_path, live=False)
+
+    def fail_liveness(_plan):
+        raise AssertionError("--no-interactive must not gate on a liveness probe")
+
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "start-here",
+            "https://github.com/org/authentic",
+            "bonsai-authentic",
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert record["config_initializer"] is None
+    assert "✅ done" not in result.stdout
+    assert "https://main.authentic.localhost (Caddy route)" in result.stdout
+
+
+def test_start_here_stops_when_git_missing(monkeypatch, tmp_path: Path) -> None:
+    parent = tmp_path / "parent"
+    parent.mkdir()
+    clone_calls: list[str] = []
+
+    def fake_preflight_report(_runner, _repo_path=None, _home=None):
+        return DoctorReport(
+            checks=(
+                DoctorCheck(
+                    "git", "fail", "git command not found", id="git", hint="Install Git"
+                ),
+            )
+        )
+
+    monkeypatch.setattr(cli, "SubprocessRunner", lambda: SimpleNamespace(), raising=False)
+    monkeypatch.setattr(cli, "preflight_report", fake_preflight_report, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "execute_clone",
+        lambda *a, **k: clone_calls.append("clone"),
+        raising=False,
+    )
+    monkeypatch.chdir(parent)
+
+    result = runner.invoke(
+        cli.app,
+        ["start-here", "https://github.com/org/authentic", "bonsai-authentic"],
+    )
+
+    assert result.exit_code == 1
+    assert clone_calls == []
+    assert "brew install git" in result.stdout

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 
 @dataclass(frozen=True)
@@ -146,6 +147,12 @@ class DoctorReport:
 class DoctorApplyAction:
     kind: str
     detail: str
+
+
+@dataclass(frozen=True)
+class CaddySetupResult:
+    actions: tuple[DoctorApplyAction, ...] = ()
+    checks: tuple[DoctorCheck, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -354,6 +361,7 @@ class OpenUrlPlan:
     url: str
     service_name: str
     port: int
+    via: Literal["caddy", "port"] = "caddy"
 
 
 @dataclass(frozen=True)

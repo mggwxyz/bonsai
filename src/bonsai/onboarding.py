@@ -1,10 +1,16 @@
 from __future__ import annotations
 
 import json
+import re
+import tomllib
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from bonsai.compose import detect_compose_project
+from bonsai.config import load_config
+from bonsai.errors import BonsaiConfigError
 from bonsai.slug import branch_slug
 
 
@@ -41,6 +47,11 @@ def detect_project_defaults(
     fallback_name: str,
     base_branch: str,
 ) -> ProjectDefaults:
+    if not (repo_path / "package.json").exists():
+        detected = _detect_non_npm_stack(repo_path, fallback_name, base_branch)
+        if detected is not None:
+            return detected
+
     package = _read_package_json(repo_path / "package.json")
     app_name = _package_app_name(package) or fallback_name
     package_manager = _package_manager(repo_path)
@@ -59,6 +70,163 @@ def detect_project_defaults(
         port_env="PORT",
         base_port=3000,
         url=f"https://${{slug}}.{app_slug}.localhost",
+    )
+
+
+def _detect_non_npm_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    detectors = (
+        _detect_python_stack,
+        _detect_go_stack,
+        _detect_rails_stack,
+        _detect_compose_stack,
+        _detect_makefile_stack,
+    )
+    for detector in detectors:
+        detected = detector(repo_path, fallback_name, base_branch)
+        if detected is not None:
+            return detected
+    return None
+
+
+def _stack_defaults(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+    *,
+    install_command: str | None,
+    start_command: str | None,
+    service_name: str,
+    port_env: str,
+    base_port: int,
+) -> ProjectDefaults:
+    app_slug = branch_slug(fallback_name) or "app"
+    return ProjectDefaults(
+        app_name=app_slug,
+        base_branch=base_branch,
+        install_command=install_command,
+        setup_command=None,
+        start_command=start_command,
+        has_env_file=(repo_path / ".env").exists(),
+        service_name=service_name,
+        port_env=port_env,
+        base_port=base_port,
+        url=f"https://${{slug}}.{app_slug}.localhost",
+    )
+
+
+def _detect_python_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    pyproject = repo_path / "pyproject.toml"
+    requirements = repo_path / "requirements.txt"
+    if not pyproject.exists() and not requirements.exists():
+        return None
+
+    if (repo_path / "uv.lock").exists():
+        install_command = "uv sync"
+    elif requirements.exists():
+        install_command = "pip install -r requirements.txt"
+    else:
+        install_command = None
+
+    return _stack_defaults(
+        repo_path,
+        fallback_name,
+        base_branch,
+        install_command=install_command,
+        start_command=_pyproject_start_command(pyproject),
+        service_name="api",
+        port_env="API_PORT",
+        base_port=8000,
+    )
+
+
+def _detect_go_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    if not (repo_path / "go.mod").exists():
+        return None
+    return _stack_defaults(
+        repo_path,
+        fallback_name,
+        base_branch,
+        install_command="go mod download",
+        start_command="go run .",
+        service_name="app",
+        port_env="PORT",
+        base_port=8080,
+    )
+
+
+def _detect_rails_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    if not (repo_path / "Gemfile").exists():
+        return None
+    return _stack_defaults(
+        repo_path,
+        fallback_name,
+        base_branch,
+        install_command="bundle install",
+        start_command="bin/rails server",
+        service_name="web",
+        port_env="PORT",
+        base_port=3000,
+    )
+
+
+def _detect_compose_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    if detect_compose_project(repo_path) is None:
+        return None
+    return _stack_defaults(
+        repo_path,
+        fallback_name,
+        base_branch,
+        install_command=None,
+        start_command="docker compose up",
+        service_name="app",
+        port_env="PORT",
+        base_port=8080,
+    )
+
+
+def _detect_makefile_stack(
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+) -> ProjectDefaults | None:
+    makefile = repo_path / "Makefile"
+    if not makefile.exists():
+        return None
+    targets = _makefile_targets(makefile)
+    install_command = "make install" if "install" in targets else None
+    start_command = next(
+        (f"make {target}" for target in ("dev", "run") if target in targets),
+        "make" if "make" in targets else None,
+    )
+    return _stack_defaults(
+        repo_path,
+        fallback_name,
+        base_branch,
+        install_command=install_command,
+        start_command=start_command,
+        service_name="app",
+        port_env="PORT",
+        base_port=8080,
     )
 
 
@@ -118,6 +286,66 @@ def write_starter_config(path: Path, config: StarterConfig) -> Path:
     return path
 
 
+def prompt_starter_config(
+    defaults: ProjectDefaults,
+    *,
+    ask: Callable[..., str],
+    confirm: Callable[[str], bool],
+    ask_optional: Callable[[str, str | None], str | None],
+) -> StarterConfig:
+    app_name = ask("App name", default=defaults.app_name).strip()
+    base_branch = ask("Base branch", default=defaults.base_branch).strip()
+    install_command = ask_optional("Install command", defaults.install_command)
+    setup_command = ask_optional("Setup command", defaults.setup_command)
+    start_command = ask_optional("Start command", defaults.start_command)
+    symlink_env = confirm(
+        "Symlink .env into each worktree",
+        default=defaults.has_env_file,
+    )
+    service_name = ask("Primary service name", default=defaults.service_name).strip()
+    port_env = ask("Port environment variable", default=defaults.port_env).strip()
+    base_port = ask("Base port", default=defaults.base_port, type=int)
+    url = ask("Local URL template", default=defaults.url).strip()
+    return StarterConfig(
+        name=app_name,
+        base_branch=base_branch,
+        install_command=install_command,
+        setup_command=setup_command,
+        start_command=start_command,
+        symlink_env=symlink_env,
+        service_name=service_name,
+        port_env=port_env,
+        base_port=base_port,
+        url=url,
+    )
+
+
+def write_guided_config(
+    config_path: Path,
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+    force: bool = False,
+    *,
+    ask: Callable[..., str],
+    confirm: Callable[..., bool],
+    ask_optional: Callable[[str, str | None], str | None],
+) -> Path:
+    if config_path.exists() and not force:
+        raise BonsaiConfigError(f".bonsai.toml already exists at {config_path}")
+    defaults = detect_project_defaults(repo_path, fallback_name, base_branch)
+    config = prompt_starter_config(
+        defaults,
+        ask=ask,
+        confirm=confirm,
+        ask_optional=ask_optional,
+    )
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    path = write_starter_config(config_path, config)
+    load_config(path)
+    return path
+
+
 def _read_package_json(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
@@ -126,6 +354,32 @@ def _read_package_json(path: Path) -> dict[str, Any]:
     except json.JSONDecodeError:
         return {}
     return value if isinstance(value, dict) else {}
+
+
+def _pyproject_start_command(pyproject: Path) -> str | None:
+    if not pyproject.exists():
+        return None
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError:
+        return None
+    project = data.get("project")
+    scripts = project.get("scripts") if isinstance(project, dict) else None
+    if not isinstance(scripts, dict):
+        return None
+    for name in scripts:
+        if isinstance(name, str) and name.strip():
+            return name
+    return None
+
+
+def _makefile_targets(makefile: Path) -> frozenset[str]:
+    try:
+        content = makefile.read_text(encoding="utf-8")
+    except OSError:
+        return frozenset()
+    targets = re.findall(r"^([A-Za-z0-9_.-]+)\s*:(?!=)", content, flags=re.MULTILINE)
+    return frozenset(targets)
 
 
 def _package_app_name(package: dict[str, Any]) -> str | None:
