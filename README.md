@@ -44,6 +44,8 @@ This runs preflight checks, clones the repo, guides you through config, offers s
 
 The URL is either a Caddy HTTPS URL (`https://<slug>.<app>.localhost`) or a direct port URL (`http://localhost:<port>`) when Caddy isn't installed — both are expected and work fine.
 
+Caddy routing is machine-global: Bonsai maintains a single config at `~/.bonsai/Caddyfile` with per-app snippet directories at `~/.bonsai/caddy.d/<app>/`, so multiple Bonsai projects coexist and all their `.localhost` URLs work simultaneously. Routes survive reboot via a managed block Bonsai keeps in Homebrew's boot config (`$(brew --prefix)/etc/Caddyfile`). Project names must be unique per machine — two projects sharing the same name will collide on hostnames and snippet paths.
+
 ### If something's missing
 
 - **git not found** — `brew install git`, then re-run `bonsai start-here`
@@ -57,7 +59,7 @@ Prefer the manual steps? `clone` → `init` → `add` → `open`.
 ## What Bonsai Manages
 
 - A workspace root with one default worktree and any number of managed branch worktrees.
-- Stable per-worktree port slots, generated `.env.local` files, and optional Caddy HTTPS snippets.
+- Stable per-worktree port slots, generated `.env.local` files, and optional Caddy HTTPS routing via a machine-global config.
 - Lifecycle commands for install, setup, and start, with optional pre/post hooks,
   live output, and timestamped logs.
 - Shell checkout, editor/browser post-add automation, and agent-friendly context output.
@@ -322,8 +324,9 @@ open a different worktree's primary URL. Pass `--service <name>` to open a
 non-primary public service URL such as an API route.
 
 `bonsai urls` prints configured public service URLs with route diagnostics for
-the root Caddyfile, generated Caddy snippet, Caddy validation, app listener,
-TLS, and local CA trust guidance. Filter by worktree, by `--service <name>`, or
+the global Caddyfile (`~/.bonsai/Caddyfile`), the per-worktree snippet under
+`~/.bonsai/caddy.d/<app>/`, Caddy validation, app listener, TLS, and local CA
+trust guidance. Filter by worktree, by `--service <name>`, or
 use `--diagnose <url>` when a specific URL is not working. Use
 `bonsai urls --format json` for automation.
 
@@ -351,10 +354,15 @@ status, service ports, service URLs, and recommended Bonsai commands. Use
 `bonsai context --format json` when an AI agent or script needs exact
 worktree-scoped ports and URLs.
 
-`bonsai sync` compares generated `.env.local` files and Caddy files against the
-current config and state. It is a dry run by default. Use `bonsai sync --apply`
-to write missing or stale generated files, remove stale Bonsai Caddy snippets,
-and reload Caddy when local routing changed.
+`bonsai sync` compares generated `.env.local` files and Caddy snippets against
+the current config and state. It is a dry run by default. Use `bonsai sync --apply`
+to write missing or stale generated files, remove stale snippets from
+`~/.bonsai/caddy.d/<app>/`, update the global `~/.bonsai/Caddyfile`, and reload
+Caddy when local routing changed. `--apply` also migrates any old per-workspace
+`Caddyfile` and `caddy.d/` to the global layout. The `[caddy]` keys
+`root_caddyfile` and `snippets_dir` in `.bonsai.toml` are deprecated — they are
+still parsed so old configs load without error, but are ignored for routing and
+are no longer written by `bonsai init`.
 
 `bonsai repair` fixes structural state drift. It removes missing managed
 worktree entries from `.bonsai/state.json` and repacks surviving managed slots in
@@ -374,10 +382,11 @@ Bonsai-managed files; use `bonsai repair-ports --format json` for
 machine-readable plans.
 
 `bonsai doctor` checks workspace state, config, git worktrees, generated files,
-Caddy files, Caddy availability, stale Docker Compose network references, and
-owner-aware configured service port conflicts. Use
-`bonsai doctor --format json` for machine-readable checks and
-`bonsai doctor --apply` to run safe workspace repairs: state repair, generated
-file sync, stopped stale Docker Compose container removal, and configured Caddy
-bootstrap when possible. Structural state drift can still be previewed with
-`bonsai repair`.
+global Caddy config (`~/.bonsai/Caddyfile` and `~/.bonsai/caddy.d/<app>/`),
+Caddy availability, stale Docker Compose network references, and owner-aware
+configured service port conflicts. Use `bonsai doctor --format json` for
+machine-readable checks and `bonsai doctor --apply` to run safe workspace
+repairs: state repair, generated file sync, stopped stale Docker Compose
+container removal, migration of any old per-workspace Caddy files to the global
+layout, and Caddy bootstrap when possible. Structural state drift can still be
+previewed with `bonsai repair`.
