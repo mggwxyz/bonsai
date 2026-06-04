@@ -54,6 +54,11 @@ def test_detect_project_defaults_uses_package_scripts_and_lockfile(tmp_path: Pat
     assert 'start = "pnpm dev"' in text
     assert 'name = "frontend"' in text
     assert "setup =" not in text
+    assert "[caddy]" in text
+    assert "auto_install = true" in text
+    assert "auto_start = true" in text
+    assert "root_caddyfile" not in text
+    assert "snippets_dir" not in text
 
 
 def test_detect_project_defaults_bare_repo_keeps_frontend_default(tmp_path: Path) -> None:
@@ -239,6 +244,11 @@ def test_render_starter_config_loads_as_valid_bonsai_config() -> None:
     assert 'install = "pnpm install"' in text
     assert 'setup = "pnpm setup"' in text
     assert 'source = ".env"' in text
+    assert "[caddy]" in text
+    assert "auto_install = true" in text
+    assert "auto_start = true" in text
+    assert "root_caddyfile" not in text
+    assert "snippets_dir" not in text
 
 
 def test_write_starter_config_creates_loadable_file(tmp_path: Path) -> None:

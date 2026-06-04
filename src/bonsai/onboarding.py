@@ -241,8 +241,6 @@ def render_starter_config(config: StarterConfig) -> str:
         "[caddy]",
         "auto_install = true",
         "auto_start = true",
-        'root_caddyfile = "Caddyfile"',
-        'snippets_dir = "caddy.d"',
     ]
 
     command_lines = []
