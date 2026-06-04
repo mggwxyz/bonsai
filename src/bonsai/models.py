@@ -14,6 +14,9 @@ class WorkspaceConfig:
 class CaddyConfig:
     auto_install: bool = True
     auto_start: bool = True
+    # Deprecated: routing is now machine-global under ~/.bonsai. These are kept
+    # so old .bonsai.toml files still load and so sync can clean up the legacy
+    # per-workspace files. They no longer affect where Caddy config is written.
     root_caddyfile: str = "Caddyfile"
     snippets_dir: str = "caddy.d"
 
