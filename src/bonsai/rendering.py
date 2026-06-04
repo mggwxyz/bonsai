@@ -56,17 +56,11 @@ def render_env_local(
     return "\n".join(lines).rstrip() + "\n"
 
 
-def render_root_caddyfile(snippets_dir: Path) -> str:
-    return "\n".join(
-        [
-            "{",
-            "\tlocal_certs",
-            "}",
-            "",
-            f"import {snippets_dir}/*.caddy",
-            "",
-        ]
-    )
+def render_root_caddyfile(app_snippet_dirs: list[Path]) -> str:
+    lines = ["{", "\tlocal_certs", "}", ""]
+    lines.extend(f"import {directory}/*.caddy" for directory in app_snippet_dirs)
+    lines.append("")
+    return "\n".join(lines)
 
 
 def render_caddy_snippets(

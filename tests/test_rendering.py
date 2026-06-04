@@ -54,11 +54,12 @@ def test_render_env_local_contains_slot_ports_and_env(tmp_path: Path) -> None:
     assert "COMPOSE_PROJECT_NAME=authentic-mb-2036-multi-worktree-port-slots" in env_text
 
 
-def test_render_root_caddyfile_imports_snippet_dir(tmp_path: Path) -> None:
-    text = render_root_caddyfile(tmp_path / "authentic" / "caddy.d")
-
+def test_render_root_caddyfile_imports_app_dirs(tmp_path: Path) -> None:
+    dirs = [tmp_path / "caddy.d" / "alpha", tmp_path / "caddy.d" / "beta"]
+    text = render_root_caddyfile(dirs)
     assert "{\n\tlocal_certs\n}" in text
-    assert f"import {tmp_path / 'authentic' / 'caddy.d'}/*.caddy" in text
+    assert f"import {dirs[0]}/*.caddy" in text
+    assert f"import {dirs[1]}/*.caddy" in text
 
 
 def test_render_caddy_snippets_only_public_services(tmp_path: Path) -> None:
