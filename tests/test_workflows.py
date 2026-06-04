@@ -1,6 +1,8 @@
 import json
 import re
+import shutil
 import signal
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -35,6 +37,7 @@ from bonsai.process import RecordingRunner
 from bonsai.rendering import render_root_caddyfile
 from bonsai.state import load_state, save_state
 from bonsai.workflows import (
+    _legacy_root_content,
     app_snippets_dir,
     check_workspace_health,
     command_summary,
@@ -748,10 +751,8 @@ def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> 
     assert ("write", default_worktree / ".env.local") in env_actions
     assert ("write", feature_worktree / ".env.local") in env_actions
 
-    root_caddyfile, _ = global_caddy_paths()
     snippets = app_snippets_dir("authentic")
     caddy_actions = {(action.kind, action.path) for action in plan.actions}
-    assert ("write", root_caddyfile) in caddy_actions
     assert ("write", snippets / "main-frontend.caddy") in caddy_actions
     assert ("write", snippets / "feature-frontend.caddy") in caddy_actions
     assert plan.reload_caddy is True
@@ -1492,13 +1493,13 @@ def test_execute_sync_apply_reloads_caddy_when_removing_last_public_service_snip
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    root_caddyfile, snippets_root = global_caddy_paths()
+    root_caddyfile, _ = global_caddy_paths()
     snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
     snippets_dir.mkdir(parents=True)
     root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
     root_caddyfile.write_text(
-        render_root_caddyfile(snippets_root),
+        render_root_caddyfile([snippets_dir]),
         encoding="utf-8",
     )
     write_config(
@@ -1551,13 +1552,13 @@ def test_execute_sync_dry_run_keeps_stale_marked_snippet_and_skips_reload(
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    root_caddyfile, snippets_root = global_caddy_paths()
+    root_caddyfile, _ = global_caddy_paths()
     snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
     snippets_dir.mkdir(parents=True)
     root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
     root_caddyfile.write_text(
-        render_root_caddyfile(snippets_root),
+        render_root_caddyfile([snippets_dir]),
         encoding="utf-8",
     )
     write_config(
@@ -1610,11 +1611,11 @@ def test_execute_sync_apply_skips_caddy_reload_without_public_services(tmp_path:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    root_caddyfile, snippets_root = global_caddy_paths()
+    root_caddyfile, _ = global_caddy_paths()
     default_worktree.mkdir(parents=True)
     root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
     root_caddyfile.write_text(
-        render_root_caddyfile(snippets_root),
+        render_root_caddyfile([]),
         encoding="utf-8",
     )
     write_config(
@@ -5786,3 +5787,109 @@ def test_execute_checkout_can_override_base_branch_for_missing_branch(
     assert plan.worktree_path == workspace_root / "feature"
     assert plan.created is True
     assert runner.commands[2].argv[-1] == "origin/develop"
+
+
+def test_two_workspaces_coexist_in_global_snippets(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+
+    def make_workspace(app: str) -> Path:
+        workspace_root = tmp_path / app
+        default_worktree = workspace_root / "main"
+        default_worktree.mkdir(parents=True)
+        write_config(
+            default_worktree,
+            VALID_CONFIG.replace('name = "authentic"', f'name = "{app}"'),
+        )
+        save_state(
+            workspace_root / ".bonsai" / "state.json",
+            BonsaiState(
+                version=1,
+                name=app,
+                default_branch="main",
+                default_worktree="main",
+                repo_url=f"git@github.com:org/{app}.git",
+                worktrees={},
+            ),
+        )
+        return workspace_root
+
+    alpha = make_workspace("alpha")
+    beta = make_workspace("beta")
+
+    execute_sync(RecordingRunner(), alpha, apply=True)
+    execute_sync(RecordingRunner(), beta, apply=True)
+
+    assert (app_snippets_dir("alpha") / "main-frontend.caddy").exists()
+    assert (app_snippets_dir("beta") / "main-frontend.caddy").exists()
+    # Syncing beta must not delete alpha's snippets (per-app cleanup scoping).
+    assert (app_snippets_dir("alpha") / "main-frontend.caddy").exists()
+
+
+def test_sync_migration_removes_legacy_per_workspace_caddy_files(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    legacy_dir = workspace_root / "caddy.d"
+    legacy_dir.mkdir(parents=True)
+    legacy_root = workspace_root / "Caddyfile"
+    legacy_root.write_text(_legacy_root_content(legacy_dir), encoding="utf-8")
+    legacy_snippet = legacy_dir / "main-frontend.caddy"
+    legacy_snippet.write_text(
+        "# Generated by bonsai. Do not edit by hand.\n"
+        "https://main.authentic.localhost {\n\ttls internal\n\treverse_proxy localhost:4200\n}\n",
+        encoding="utf-8",
+    )
+    user_file = legacy_dir / "user-notes.caddy"
+    user_file.write_text("# hand written, not bonsai\n", encoding="utf-8")
+
+    execute_sync(RecordingRunner(), workspace_root, apply=True)
+
+    # Legacy bonsai-generated files removed.
+    assert not legacy_root.exists()
+    assert not legacy_snippet.exists()
+    # User-authored file (no bonsai header) preserved.
+    assert user_file.exists()
+    # Global equivalents written.
+    assert global_caddy_paths()[0].exists()
+    assert (app_snippets_dir("authentic") / "main-frontend.caddy").exists()
+
+
+def test_caddy_validates_global_root_with_two_app_subdirs(tmp_path: Path) -> None:
+    if shutil.which("caddy") is None:
+        pytest.skip("caddy not installed")
+    snippets_root = tmp_path / "caddy.d"
+    for app in ("alpha", "beta"):
+        app_dir = snippets_root / app
+        app_dir.mkdir(parents=True)
+        (app_dir / "main-frontend.caddy").write_text(
+            f"https://main.{app}.localhost {{\n"
+            "\ttls internal\n\treverse_proxy localhost:4201\n}\n",
+            encoding="utf-8",
+        )
+    root = tmp_path / "Caddyfile"
+    root.write_text(
+        render_root_caddyfile([snippets_root / "alpha", snippets_root / "beta"]),
+        encoding="utf-8",
+    )
+    result = subprocess.run(
+        ["caddy", "validate", "--config", str(root), "--adapter", "caddyfile"],
+        capture_output=True,
+        text=True,
+    )
+    assert result.returncode == 0, result.stderr

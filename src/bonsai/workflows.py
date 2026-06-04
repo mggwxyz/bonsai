@@ -175,6 +175,17 @@ def app_snippets_dir(app_name: str) -> Path:
     return snippets_root / _safe_path_segment(app_name, "workspace name")
 
 
+def _app_snippet_dirs(snippets_root: Path) -> list[Path]:
+    """App subdirectories under the global snippets root that contain snippets."""
+    if not snippets_root.exists():
+        return []
+    return sorted(
+        directory
+        for directory in snippets_root.iterdir()
+        if directory.is_dir() and any(directory.glob("*.caddy"))
+    )
+
+
 def _legacy_root_content(snippets_dir: Path) -> str:
     """The exact content the old per-workspace root Caddyfile used to carry."""
     return "\n".join(["{", "\tlocal_certs", "}", "", f"import {snippets_dir}/*.caddy", ""])
@@ -1216,11 +1227,8 @@ def _desired_sync_files(
     state: BonsaiState,
     workspace_root: Path,
 ) -> dict[Path, str]:
-    root_caddyfile, snippets_root = global_caddy_paths()
     snippets_dir = app_snippets_dir(config.name)
-    desired: dict[Path, str] = {
-        root_caddyfile: render_root_caddyfile(snippets_root),
-    }
+    desired: dict[Path, str] = {}
     for target in _configured_worktree_targets(state, workspace_root):
         desired[target.worktree_path / ".env.local"] = render_env_local(
             config,
@@ -1293,11 +1301,9 @@ def _sync_actions_affect_caddy(
     config: BonsaiConfig,
     actions: list[SyncFileAction],
 ) -> bool:
-    root_caddyfile, _ = global_caddy_paths()
     snippets_dir = app_snippets_dir(config.name)
     return any(
-        action.path == root_caddyfile
-        or (action.path.parent == snippets_dir and action.path.suffix == ".caddy")
+        action.path.parent == snippets_dir and action.path.suffix == ".caddy"
         for action in actions
     )
 
@@ -1934,7 +1940,7 @@ def _workspace_url_checks(
     port_status: WorkspacePort,
 ) -> tuple[UrlCheck, ...]:
     root_caddyfile, snippets_root = global_caddy_paths()
-    expected_root = render_root_caddyfile(snippets_root)
+    expected_root = render_root_caddyfile(_app_snippet_dirs(snippets_root))
     port = service.base_port + target.worktree.slot
     expected_route = render_caddy_snippets(
         config,
@@ -1967,7 +1973,7 @@ def _workspace_url_checks(
             UrlCheck(
                 "root Caddyfile",
                 "ok",
-                f"imports {snippets_root}/*/*.caddy",
+                f"imports app snippets under {snippets_root}",
             )
         )
 
@@ -2386,23 +2392,25 @@ def run_configured_lifecycle_commands(
 def reload_workspace_caddy(runner: Runner) -> None:
     root_caddyfile, snippets_root = global_caddy_paths()
     snippets_root.mkdir(parents=True, exist_ok=True)
-    expected_root = render_root_caddyfile(snippets_root)
+    app_dirs = _app_snippet_dirs(snippets_root)
+    expected_root = render_root_caddyfile(app_dirs)
     if not root_caddyfile.exists() or root_caddyfile.read_text(encoding="utf-8") != expected_root:
         root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
         root_caddyfile.write_text(expected_root, encoding="utf-8")
-    _ensure_caddy_boot_config(runner, snippets_root)
+    _ensure_caddy_boot_config(runner, app_dirs)
     command = caddy_reload_plan(root_caddyfile)
     runner.run(list(command.argv), cwd=command.cwd)
 
 
-def _ensure_caddy_boot_config(runner: Runner, snippets_root: Path) -> None:
+def _ensure_caddy_boot_config(runner: Runner, app_dirs: list[Path]) -> None:
     if not _command_available(runner, ["caddy", "version"]):
         return
     boot_path = caddy_boot_config_path(runner)
     if boot_path is None:
         return
     existing = boot_path.read_text(encoding="utf-8") if boot_path.exists() else ""
-    merged = merge_boot_config(existing, f"{snippets_root}/*/*.caddy")
+    import_lines = [f"import {directory}/*.caddy" for directory in app_dirs]
+    merged = merge_boot_config(existing, import_lines)
     if merged != existing:
         boot_path.parent.mkdir(parents=True, exist_ok=True)
         boot_path.write_text(merged, encoding="utf-8")

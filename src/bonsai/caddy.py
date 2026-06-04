@@ -29,22 +29,22 @@ def caddy_reload_plan(caddyfile: Path) -> CommandSpec:
     return CommandSpec(argv=("caddy", "reload", "--config", str(caddyfile)))
 
 
-def merge_boot_config(existing_text: str, snippets_glob: str) -> str:
-    """Insert or refresh the marker-delimited managed import block.
+def merge_boot_config(existing_text: str, import_lines: list[str]) -> str:
+    """Insert or refresh the marker-delimited managed block from import lines.
 
     Empty input is owned outright (header + global block + managed block).
     Foreign content keeps everything outside the markers byte-for-byte.
     """
-    managed = "\n".join([BOOT_BLOCK_BEGIN, f"import {snippets_glob}", BOOT_BLOCK_END])
+    body = "\n".join([BOOT_BLOCK_BEGIN, *import_lines, BOOT_BLOCK_END])
     if existing_text.strip() == "":
-        return "\n".join([GENERATED_FILE_HEADER, "{", "\tlocal_certs", "}", "", managed, ""])
+        return "\n".join([GENERATED_FILE_HEADER, "{", "\tlocal_certs", "}", "", body, ""])
     begin = existing_text.find(BOOT_BLOCK_BEGIN)
     if begin != -1:
         end = existing_text.find(BOOT_BLOCK_END, begin)
         if end != -1:
-            return existing_text[:begin] + managed + existing_text[end + len(BOOT_BLOCK_END) :]
+            return existing_text[:begin] + body + existing_text[end + len(BOOT_BLOCK_END) :]
     prefix = existing_text if existing_text.endswith("\n") else existing_text + "\n"
-    return f"{prefix}\n{managed}\n"
+    return f"{prefix}\n{body}\n"
 
 
 def caddy_boot_config_path(runner: Runner) -> Path | None:
