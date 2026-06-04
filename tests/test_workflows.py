@@ -742,12 +742,18 @@ def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> 
 
     plan = plan_sync(workspace_root)
 
-    actions = {(action.kind, action.path.relative_to(workspace_root)) for action in plan.actions}
-    assert ("write", Path("main/.env.local")) in actions
-    assert ("write", Path("feature/.env.local")) in actions
-    assert ("write", Path("Caddyfile")) in actions
-    assert ("write", Path("caddy.d/main-frontend.caddy")) in actions
-    assert ("write", Path("caddy.d/feature-frontend.caddy")) in actions
+    env_actions = {
+        (action.kind, action.path) for action in plan.actions if action.path.name == ".env.local"
+    }
+    assert ("write", default_worktree / ".env.local") in env_actions
+    assert ("write", feature_worktree / ".env.local") in env_actions
+
+    root_caddyfile, _ = global_caddy_paths()
+    snippets = app_snippets_dir("authentic")
+    caddy_actions = {(action.kind, action.path) for action in plan.actions}
+    assert ("write", root_caddyfile) in caddy_actions
+    assert ("write", snippets / "main-frontend.caddy") in caddy_actions
+    assert ("write", snippets / "feature-frontend.caddy") in caddy_actions
     assert plan.reload_caddy is True
 
 
@@ -1090,9 +1096,9 @@ def test_plan_workspace_summary_reports_invalid_service_url_template(
 def test_plan_sync_removes_stale_configured_service_snippets(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
+    snippets_dir.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
     stale = snippets_dir / "old-feature-frontend.caddy"
     stale.write_text(
@@ -1129,9 +1135,9 @@ def test_plan_sync_preserves_handwritten_service_suffix_collision(
 ) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
+    snippets_dir.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
     custom = snippets_dir / "custom-frontend.caddy"
     custom.write_text(
@@ -1162,9 +1168,9 @@ def test_plan_sync_preserves_handwritten_service_suffix_collision(
 def test_plan_sync_removes_marked_stale_unknown_service_snippet(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
+    snippets_dir.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
     stale = snippets_dir / "old-feature-removed-service.caddy"
     stale.write_text(
@@ -1398,20 +1404,21 @@ def test_execute_sync_apply_writes_files_and_reloads_caddy(tmp_path: Path) -> No
 
     plan = execute_sync(runner, workspace_root, apply=True)
 
+    root_caddyfile, _ = global_caddy_paths()
     assert (default_worktree / ".env.local").exists()
-    assert (workspace_root / "Caddyfile").exists()
-    assert (workspace_root / "caddy.d" / "main-frontend.caddy").exists()
+    assert root_caddyfile.exists()
+    assert (app_snippets_dir("authentic") / "main-frontend.caddy").exists()
     assert plan.reload_caddy is True
-    assert runner.commands[-1] == caddy_reload_plan(workspace_root / "Caddyfile")
+    assert runner.commands[-1] == caddy_reload_plan(root_caddyfile)
 
 
 def test_execute_sync_apply_removes_stale_generated_snippet(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
+    snippets_dir.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
     stale = snippets_dir / "old-feature-frontend.caddy"
     stale.write_text(
@@ -1447,9 +1454,9 @@ def test_execute_sync_apply_removes_marked_stale_unknown_service_snippet(
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
+    snippets_dir.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
     stale = snippets_dir / "old-feature-removed-service.caddy"
     stale.write_text(
@@ -1485,11 +1492,13 @@ def test_execute_sync_apply_reloads_caddy_when_removing_last_public_service_snip
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    root_caddyfile, snippets_root = global_caddy_paths()
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
-    (workspace_root / "Caddyfile").write_text(
-        render_root_caddyfile(snippets_dir),
+    snippets_dir.mkdir(parents=True)
+    root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
+    root_caddyfile.write_text(
+        render_root_caddyfile(snippets_root),
         encoding="utf-8",
     )
     write_config(
@@ -1533,7 +1542,7 @@ public = false
 
     assert plan.reload_caddy is True
     assert not stale.exists()
-    assert runner.commands[-1] == caddy_reload_plan(workspace_root / "Caddyfile")
+    assert runner.commands[-1] == caddy_reload_plan(root_caddyfile)
 
 
 def test_execute_sync_dry_run_keeps_stale_marked_snippet_and_skips_reload(
@@ -1542,11 +1551,13 @@ def test_execute_sync_dry_run_keeps_stale_marked_snippet_and_skips_reload(
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    root_caddyfile, snippets_root = global_caddy_paths()
+    snippets_dir = app_snippets_dir("authentic")
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
-    (workspace_root / "Caddyfile").write_text(
-        render_root_caddyfile(snippets_dir),
+    snippets_dir.mkdir(parents=True)
+    root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
+    root_caddyfile.write_text(
+        render_root_caddyfile(snippets_root),
         encoding="utf-8",
     )
     write_config(
@@ -1599,11 +1610,11 @@ def test_execute_sync_apply_skips_caddy_reload_without_public_services(tmp_path:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
-    snippets_dir = workspace_root / "caddy.d"
+    root_caddyfile, snippets_root = global_caddy_paths()
     default_worktree.mkdir(parents=True)
-    snippets_dir.mkdir()
-    (workspace_root / "Caddyfile").write_text(
-        render_root_caddyfile(snippets_dir),
+    root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
+    root_caddyfile.write_text(
+        render_root_caddyfile(snippets_root),
         encoding="utf-8",
     )
     write_config(
@@ -2336,7 +2347,7 @@ def test_execute_port_repairs_apply_updates_state_and_syncs_files(
     assert "FRONTEND_PORT=4203" in env_text
     assert "API_PORT=3336" in env_text
     assert "DB_PORT=5558" in env_text
-    assert ("caddy", "reload", "--config", str(workspace_root / "Caddyfile")) in [
+    assert ("caddy", "reload", "--config", str(global_caddy_paths()[0])) in [
         command.argv for command in runner.commands
     ]
 
@@ -2742,44 +2753,6 @@ def test_plan_clone_workspace_rejects_unsafe_workspace_name(tmp_path: Path) -> N
         )
 
 
-def test_plan_clone_workspace_rejects_unsafe_snippets_dir(tmp_path: Path) -> None:
-    config_text = VALID_CONFIG.replace(
-        'snippets_dir = "caddy.d"',
-        'snippets_dir = "../outside"',
-    )
-    config = load_config(
-        write_config(tmp_path, config_text)
-    )
-
-    with pytest.raises(BonsaiWorkspaceError, match="Invalid caddy snippets_dir"):
-        plan_clone_workspace(
-            git_url="git@github.com:org/authentic.git",
-            name="authentic",
-            default_branch="main",
-            config=config,
-            parent=tmp_path,
-        )
-
-
-def test_plan_clone_workspace_rejects_unsafe_root_caddyfile(tmp_path: Path) -> None:
-    config_text = VALID_CONFIG.replace(
-        'root_caddyfile = "Caddyfile"',
-        'root_caddyfile = "/tmp/Caddyfile"',
-    )
-    config = load_config(
-        write_config(tmp_path, config_text)
-    )
-
-    with pytest.raises(BonsaiWorkspaceError, match="Invalid caddy root_caddyfile"):
-        plan_clone_workspace(
-            git_url="git@github.com:org/authentic.git",
-            name="authentic",
-            default_branch="main",
-            config=config,
-            parent=tmp_path,
-        )
-
-
 def test_plan_add_files_rejects_unsafe_service_name(tmp_path: Path) -> None:
     config_text = VALID_CONFIG.replace(
         '[[services]]\nname = "frontend"',
@@ -3098,7 +3071,7 @@ def test_execute_clone_initializes_missing_config_after_clone(tmp_path: Path) ->
     ]
     assert plan.workspace_root == tmp_path / "authentic"
     assert (tmp_path / "authentic" / ".bonsai" / "state.json").exists()
-    assert (tmp_path / "authentic" / "Caddyfile").exists()
+    assert (app_snippets_dir("authentic") / "main-frontend.caddy").exists()
 
 
 def test_execute_clone_runs_install_and_setup_with_default_worktree_env(
@@ -3241,7 +3214,7 @@ def test_execute_clone_uses_repo_config_when_root_config_is_missing(tmp_path: Pa
     )
 
     assert plan.workspace_root == tmp_path / "authentic"
-    assert (tmp_path / "authentic" / "Caddyfile").exists()
+    assert (app_snippets_dir("authentic") / "main-frontend.caddy").exists()
 
 
 def test_execute_init_adopts_existing_checkout_config(tmp_path: Path) -> None:
@@ -3289,7 +3262,7 @@ def test_execute_init_adopts_existing_checkout_config(tmp_path: Path) -> None:
     assert plan.default_worktree == default_worktree
     assert (default_worktree / ".bonsai.toml").read_text(encoding="utf-8") == VALID_CONFIG
     assert (default_worktree / ".env.local").exists()
-    assert (workspace_root / "Caddyfile").exists()
+    assert (app_snippets_dir("authentic") / "main-frontend.caddy").exists()
 
 
 def test_execute_init_adopts_existing_sibling_worktrees(tmp_path: Path) -> None:
@@ -3338,7 +3311,7 @@ def test_execute_init_adopts_existing_sibling_worktrees(tmp_path: Path) -> None:
         "MA-123-auth": ManagedWorktree(path="ma-123-auth", slug="ma-123-auth", slot=1)
     }
     assert (feature_worktree / ".env.local").exists()
-    assert (workspace_root / "caddy.d" / "ma-123-auth-frontend.caddy").exists()
+    assert (app_snippets_dir("authentic") / "ma-123-auth-frontend.caddy").exists()
 
 
 def test_execute_init_reconciles_existing_state_with_missing_worktrees(
@@ -3409,7 +3382,7 @@ def test_execute_init_reconciles_existing_state_with_missing_worktrees(
         "MA-123-auth": ManagedWorktree(path="ma-123-auth", slug="ma-123-auth", slot=1),
     }
     assert (missing_worktree / ".env.local").exists()
-    assert (workspace_root / "caddy.d" / "ma-123-auth-frontend.caddy").exists()
+    assert (app_snippets_dir("authentic") / "ma-123-auth-frontend.caddy").exists()
 
 
 def test_execute_init_rejects_checkout_directory_that_does_not_match_branch(
@@ -3502,9 +3475,9 @@ def test_execute_add_reloads_workspace_caddyfile_after_writing_snippets(tmp_path
 
     execute_add(runner, "feature", workspace_root)
 
-    assert (workspace_root / "caddy.d" / "feature-frontend.caddy").exists()
+    assert (app_snippets_dir("authentic") / "feature-frontend.caddy").exists()
     assert CommandSpec(
-        argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))
+        argv=("caddy", "reload", "--config", str(global_caddy_paths()[0]))
     ) in runner.commands
 
 
@@ -3587,7 +3560,7 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     assert (branch_worktree / ".env.local").exists()
     assert (branch_worktree / ".env").is_symlink()
     assert (branch_worktree / ".env").resolve() == default_worktree / ".env"
-    assert (workspace_root / "caddy.d" / "feature-frontend.caddy").exists()
+    assert (app_snippets_dir("authentic") / "feature-frontend.caddy").exists()
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.worktrees["feature"].path == "feature"
     assert all("worktree" not in command.argv for command in runner.commands)
@@ -4206,8 +4179,8 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
     default_worktree.mkdir(parents=True)
     branch_worktree.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
-    snippets = workspace_root / "caddy.d"
-    snippets.mkdir()
+    snippets = app_snippets_dir("authentic")
+    snippets.mkdir(parents=True)
     (snippets / "feature-frontend.caddy").write_text("feature\n", encoding="utf-8")
     (snippets / "other-frontend.caddy").write_text("other\n", encoding="utf-8")
     save_state(
@@ -4247,7 +4220,7 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
         )
     ) in runner.commands
     assert runner.commands[-1] == CommandSpec(
-        argv=("caddy", "reload", "--config", str(workspace_root / "Caddyfile"))
+        argv=("caddy", "reload", "--config", str(global_caddy_paths()[0]))
     )
 
 
@@ -4393,8 +4366,8 @@ def test_execute_remove_blocks_when_compose_teardown_fails(tmp_path: Path) -> No
         "COMPOSE_PROJECT_NAME=authentic-feature\n",
         encoding="utf-8",
     )
-    snippets = workspace_root / "caddy.d"
-    snippets.mkdir()
+    snippets = app_snippets_dir("authentic")
+    snippets.mkdir(parents=True, exist_ok=True)
     snippet = snippets / "feature-frontend.caddy"
     snippet.write_text("feature\n", encoding="utf-8")
     save_state(
@@ -4498,20 +4471,16 @@ def test_execute_remove_forces_dirty_worktree_when_requested(tmp_path: Path) -> 
 
     execute_remove(runner, "feature", workspace_root, force=True)
 
-    assert runner.commands[-2].argv == (
-        "git",
-        "-C",
-        str(default_worktree),
-        "worktree",
-        "remove",
-        "--force",
-        str(branch_worktree),
+    git_remove = (
+        "git", "-C", str(default_worktree), "worktree", "remove",
+        "--force", str(branch_worktree),
     )
+    assert any(cmd.argv == git_remove for cmd in runner.commands)
     assert runner.commands[-1].argv == (
         "caddy",
         "reload",
         "--config",
-        str(workspace_root / "Caddyfile"),
+        str(global_caddy_paths()[0]),
     )
     assert load_state(workspace_root / ".bonsai" / "state.json").worktrees == {}
 
@@ -4575,8 +4544,8 @@ def test_execute_remove_preserves_state_when_git_remove_fails(tmp_path: Path) ->
     default_worktree.mkdir(parents=True)
     branch_worktree.mkdir(parents=True)
     write_config(default_worktree, VALID_CONFIG)
-    snippets = workspace_root / "caddy.d"
-    snippets.mkdir()
+    snippets = app_snippets_dir("authentic")
+    snippets.mkdir(parents=True, exist_ok=True)
     snippet = snippets / "feature-frontend.caddy"
     snippet.write_text("feature\n", encoding="utf-8")
     save_state(
@@ -4800,8 +4769,8 @@ def test_execute_cleanup_apply_removes_merged_clean_worktrees(tmp_path: Path) ->
     feature_worktree.mkdir()
     open_worktree.mkdir()
     write_config(default_worktree, VALID_CONFIG)
-    snippets = workspace_root / "caddy.d"
-    snippets.mkdir()
+    snippets = app_snippets_dir("authentic")
+    snippets.mkdir(parents=True, exist_ok=True)
     (snippets / "feature-frontend.caddy").write_text("feature\n", encoding="utf-8")
     (snippets / "open-frontend.caddy").write_text("open\n", encoding="utf-8")
     save_state(
@@ -5226,7 +5195,7 @@ def test_plan_workspace_urls_reports_route_tls_and_app_diagnostics(
     assert item.port == 4201
     assert item.url == "https://feature.authentic.localhost"
     assert not item.url.startswith("http://localhost")
-    assert item.caddy_snippet_path == workspace_root / "caddy.d" / "feature-frontend.caddy"
+    assert item.caddy_snippet_path == app_snippets_dir("authentic") / "feature-frontend.caddy"
     checks = {check.name: check for check in item.checks}
     assert checks["root Caddyfile"].status == "fail"
     assert checks["Caddy route"].status == "fail"

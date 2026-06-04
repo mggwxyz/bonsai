@@ -58,7 +58,7 @@ def test_render_root_caddyfile_imports_snippet_dir(tmp_path: Path) -> None:
     text = render_root_caddyfile(tmp_path / "authentic" / "caddy.d")
 
     assert "{\n\tlocal_certs\n}" in text
-    assert f"import {tmp_path / 'authentic' / 'caddy.d'}/*.caddy" in text
+    assert f"import {tmp_path / 'authentic' / 'caddy.d'}/*/*.caddy" in text
 
 
 def test_render_caddy_snippets_only_public_services(tmp_path: Path) -> None:

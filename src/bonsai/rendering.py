@@ -63,7 +63,7 @@ def render_root_caddyfile(snippets_dir: Path) -> str:
             "\tlocal_certs",
             "}",
             "",
-            f"import {snippets_dir}/*.caddy",
+            f"import {snippets_dir}/*/*.caddy",
             "",
         ]
     )

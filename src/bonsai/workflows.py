@@ -10,7 +10,12 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 
-from bonsai.caddy import caddy_reload_plan, caddy_setup_plan
+from bonsai.caddy import (
+    caddy_boot_config_path,
+    caddy_reload_plan,
+    caddy_setup_plan,
+    merge_boot_config,
+)
 from bonsai.compose import (
     StaleComposeContainer,
     detect_compose_project,
@@ -206,11 +211,8 @@ def plan_clone_workspace(
     parent: Path,
 ) -> CloneWorkspacePlan:
     name = _safe_path_segment(name, "workspace name")
-    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     workspace_root = parent / name
     default_worktree = workspace_root / default_branch
-    snippets_dir = workspace_root / snippets_dir_name
     state = BonsaiState(
         version=1,
         name=name,
@@ -219,18 +221,11 @@ def plan_clone_workspace(
         repo_url=git_url,
         worktrees={},
     )
-    files = (
-        FileWrite(
-            path=workspace_root / root_caddyfile,
-            content=render_root_caddyfile(snippets_dir),
-        ),
-        *generated_worktree_files(
-            config,
-            branch=default_branch,
-            slot=0,
-            workspace_root=workspace_root,
-            worktree_path=default_worktree,
-        ),
+    files = generated_worktree_files(
+        config,
+        branch=default_branch,
+        slot=0,
+        worktree_path=default_worktree,
     )
     return CloneWorkspacePlan(
         workspace_root=workspace_root,
@@ -244,14 +239,12 @@ def generated_worktree_files(
     config: BonsaiConfig,
     branch: str,
     slot: int,
-    workspace_root: Path,
     worktree_path: Path,
 ) -> tuple[FileWrite, ...]:
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
     slug = branch_slug(branch)
     if slug == "":
         raise BonsaiWorkspaceError(f"Invalid branch slug: {branch!r}")
-    snippets_dir = workspace_root / snippets_dir_name
+    snippets_dir = app_snippets_dir(config.name)
     files = [
         FileWrite(
             path=worktree_path / ".env.local",
@@ -282,7 +275,7 @@ def plan_add_files(
         slot = existing_worktree.slot
     worktree_path = workspace_root / slug
     default_worktree_path = workspace_root / state.default_worktree
-    files = list(generated_worktree_files(config, branch, slot, workspace_root, worktree_path))
+    files = list(generated_worktree_files(config, branch, slot, worktree_path))
     symlinks: list[FileSymlink] = []
     for shared_file in config.shared_files:
         source = _safe_path_segment(shared_file.source, "shared file source")
@@ -445,12 +438,10 @@ def plan_move_worktree(
 
 
 def _remove_generated_snippets(
-    workspace_root: Path,
     config: BonsaiConfig,
     slug: str,
 ) -> tuple[Path, ...]:
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
-    snippets_dir = workspace_root / snippets_dir_name
+    snippets_dir = app_snippets_dir(config.name)
     removed: list[Path] = []
     if not snippets_dir.exists():
         return ()
@@ -1225,11 +1216,10 @@ def _desired_sync_files(
     state: BonsaiState,
     workspace_root: Path,
 ) -> dict[Path, str]:
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
-    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
-    snippets_dir = workspace_root / snippets_dir_name
+    root_caddyfile, snippets_root = global_caddy_paths()
+    snippets_dir = app_snippets_dir(config.name)
     desired: dict[Path, str] = {
-        workspace_root / root_caddyfile: render_root_caddyfile(snippets_dir),
+        root_caddyfile: render_root_caddyfile(snippets_root),
     }
     for target in _configured_worktree_targets(state, workspace_root):
         desired[target.worktree_path / ".env.local"] = render_env_local(
@@ -1251,11 +1241,9 @@ def _desired_sync_files(
 
 def _stale_generated_snippet_actions(
     config: BonsaiConfig,
-    workspace_root: Path,
     desired_paths: set[Path],
 ) -> tuple[SyncFileAction, ...]:
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
-    snippets_dir = workspace_root / snippets_dir_name
+    snippets_dir = app_snippets_dir(config.name)
     if not snippets_dir.exists():
         return ()
     actions: list[SyncFileAction] = []
@@ -1266,6 +1254,29 @@ def _stale_generated_snippet_actions(
             continue
         if _is_bonsai_generated_file(path):
             actions.append(SyncFileAction(kind="remove", path=path))
+    return tuple(actions)
+
+
+def _legacy_caddy_cleanup_actions(
+    config: BonsaiConfig,
+    workspace_root: Path,
+) -> tuple[SyncFileAction, ...]:
+    """Remove the dead per-workspace Caddyfile and snippets left by the old model."""
+    actions: list[SyncFileAction] = []
+    legacy_dir = workspace_root / _safe_path_segment(
+        config.caddy.snippets_dir, "caddy snippets_dir"
+    )
+    legacy_root = workspace_root / _safe_path_segment(
+        config.caddy.root_caddyfile, "caddy root_caddyfile"
+    )
+    if legacy_root.is_file() and legacy_root.read_text(encoding="utf-8") == _legacy_root_content(
+        legacy_dir
+    ):
+        actions.append(SyncFileAction(kind="remove", path=legacy_root))
+    if legacy_dir.is_dir():
+        for path in sorted(legacy_dir.glob("*.caddy")):
+            if path.is_file() and _is_bonsai_generated_file(path):
+                actions.append(SyncFileAction(kind="remove", path=path))
     return tuple(actions)
 
 
@@ -1280,17 +1291,10 @@ def _is_bonsai_generated_file(path: Path) -> bool:
 
 def _sync_actions_affect_caddy(
     config: BonsaiConfig,
-    workspace_root: Path,
     actions: list[SyncFileAction],
 ) -> bool:
-    root_caddyfile = workspace_root / _safe_path_segment(
-        config.caddy.root_caddyfile,
-        "caddy root_caddyfile",
-    )
-    snippets_dir = workspace_root / _safe_path_segment(
-        config.caddy.snippets_dir,
-        "caddy snippets_dir",
-    )
+    root_caddyfile, _ = global_caddy_paths()
+    snippets_dir = app_snippets_dir(config.name)
     return any(
         action.path == root_caddyfile
         or (action.path.parent == snippets_dir and action.path.suffix == ".caddy")
@@ -1306,17 +1310,12 @@ def plan_sync(workspace_root: Path) -> SyncPlan:
     for path, content in sorted(desired.items(), key=lambda item: str(item[0])):
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             actions.append(SyncFileAction(kind="write", path=path, content=content))
-    actions.extend(
-        _stale_generated_snippet_actions(
-            config,
-            workspace_root,
-            set(desired),
-        )
-    )
+    actions.extend(_stale_generated_snippet_actions(config, set(desired)))
+    actions.extend(_legacy_caddy_cleanup_actions(config, workspace_root))
     return SyncPlan(
         actions=tuple(actions),
         reload_caddy=bool(config.public_services())
-        or _sync_actions_affect_caddy(config, workspace_root, actions),
+        or _sync_actions_affect_caddy(config, actions),
     )
 
 
@@ -1331,9 +1330,7 @@ def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> S
         elif action.kind == "remove":
             action.path.unlink(missing_ok=True)
     if plan.reload_caddy:
-        state = load_state(workspace_root / ".bonsai" / "state.json")
-        config = load_workspace_config(workspace_root, state)
-        reload_workspace_caddy(runner, config, workspace_root)
+        reload_workspace_caddy(runner)
     return plan
 
 
@@ -1435,10 +1432,7 @@ def check_workspace_health(runner: Runner, workspace_root: Path) -> DoctorReport
             )
 
     if config.public_services():
-        root_caddyfile = workspace_root / _safe_path_segment(
-            config.caddy.root_caddyfile,
-            "caddy root_caddyfile",
-        )
+        root_caddyfile, _ = global_caddy_paths()
         checks.append(
             DoctorCheck(
                 "root Caddyfile",
@@ -1939,16 +1933,9 @@ def _workspace_url_checks(
     caddy_snippet_path: Path,
     port_status: WorkspacePort,
 ) -> tuple[UrlCheck, ...]:
-    root_caddyfile = workspace_root / _safe_path_segment(
-        config.caddy.root_caddyfile,
-        "caddy root_caddyfile",
-    )
-    snippets_dir = workspace_root / _safe_path_segment(
-        config.caddy.snippets_dir,
-        "caddy snippets_dir",
-    )
+    root_caddyfile, snippets_root = global_caddy_paths()
+    expected_root = render_root_caddyfile(snippets_root)
     port = service.base_port + target.worktree.slot
-    expected_root = render_root_caddyfile(snippets_dir)
     expected_route = render_caddy_snippets(
         config,
         target.branch,
@@ -1980,7 +1967,7 @@ def _workspace_url_checks(
             UrlCheck(
                 "root Caddyfile",
                 "ok",
-                f"imports {snippets_dir}/*.caddy",
+                f"imports {snippets_root}/*/*.caddy",
             )
         )
 
@@ -2131,10 +2118,7 @@ def plan_workspace_urls(
 ) -> WorkspaceUrlsPlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
-    snippets_dir = workspace_root / _safe_path_segment(
-        config.caddy.snippets_dir,
-        "caddy snippets_dir",
-    )
+    snippets_dir = app_snippets_dir(config.name)
     targets = (
         (resolve_start_target(workspace_root, name, workspace_root),)
         if name is not None
@@ -2187,8 +2171,7 @@ def plan_workspace_urls(
         raise BonsaiWorkspaceError(f"URL is not configured by Bonsai: {diagnose_url}")
     return WorkspaceUrlsPlan(
         workspace_root=workspace_root,
-        caddyfile=workspace_root
-        / _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile"),
+        caddyfile=global_caddy_paths()[0],
         urls=tuple(items),
     )
 
@@ -2400,10 +2383,29 @@ def run_configured_lifecycle_commands(
             )
 
 
-def reload_workspace_caddy(runner: Runner, config: BonsaiConfig, workspace_root: Path) -> None:
-    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
-    command = caddy_reload_plan(workspace_root / root_caddyfile)
+def reload_workspace_caddy(runner: Runner) -> None:
+    root_caddyfile, snippets_root = global_caddy_paths()
+    snippets_root.mkdir(parents=True, exist_ok=True)
+    expected_root = render_root_caddyfile(snippets_root)
+    if not root_caddyfile.exists() or root_caddyfile.read_text(encoding="utf-8") != expected_root:
+        root_caddyfile.parent.mkdir(parents=True, exist_ok=True)
+        root_caddyfile.write_text(expected_root, encoding="utf-8")
+    _ensure_caddy_boot_config(runner, snippets_root)
+    command = caddy_reload_plan(root_caddyfile)
     runner.run(list(command.argv), cwd=command.cwd)
+
+
+def _ensure_caddy_boot_config(runner: Runner, snippets_root: Path) -> None:
+    if not _command_available(runner, ["caddy", "version"]):
+        return
+    boot_path = caddy_boot_config_path(runner)
+    if boot_path is None:
+        return
+    existing = boot_path.read_text(encoding="utf-8") if boot_path.exists() else ""
+    merged = merge_boot_config(existing, f"{snippets_root}/*/*.caddy")
+    if merged != existing:
+        boot_path.parent.mkdir(parents=True, exist_ok=True)
+        boot_path.write_text(merged, encoding="utf-8")
 
 
 def execute_clone(
@@ -2479,9 +2481,6 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
             worktrees={},
         )
 
-    root_caddyfile = _safe_path_segment(config.caddy.root_caddyfile, "caddy root_caddyfile")
-    snippets_dir_name = _safe_path_segment(config.caddy.snippets_dir, "caddy snippets_dir")
-    snippets_dir = workspace_root / snippets_dir_name
     adopted_worktrees: dict[str, ManagedWorktree] = dict(base_state.worktrees)
     workspace_root_resolved = workspace_root.resolve()
     checkout_path_resolved = checkout_path.resolve()
@@ -2509,26 +2508,20 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
         base_state,
         worktrees=adopted_worktrees,
     )
-    files = [
-        FileWrite(
-            path=workspace_root / root_caddyfile,
-            content=render_root_caddyfile(snippets_dir),
-        ),
-        *generated_worktree_files(
+    files = list(
+        generated_worktree_files(
             config,
             branch=default_branch,
             slot=0,
-            workspace_root=workspace_root,
             worktree_path=checkout_path,
-        ),
-    ]
+        )
+    )
     for branch, worktree in adopted_worktrees.items():
         files.extend(
             generated_worktree_files(
                 config,
                 branch=branch,
                 slot=worktree.slot,
-                workspace_root=workspace_root,
                 worktree_path=workspace_root / worktree.path,
             )
         )
@@ -2582,7 +2575,7 @@ def execute_add(
     apply_symlinks(plan.symlinks)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
-    reload_workspace_caddy(runner, config, workspace_root)
+    reload_workspace_caddy(runner)
     command_env = generated_worktree_env(plan.files)
     worktree_slug = plan.updated_state.worktrees[branch].slug
     run_configured_lifecycle_commands(
@@ -2671,11 +2664,11 @@ def execute_remove(
         teardown_compose_project(runner, compose_project)
 
     git_remove_worktree(runner, default_worktree, worktree_path, force=force)
-    removed_snippets = _remove_generated_snippets(workspace_root, config, resolved.worktree.slug)
+    removed_snippets = _remove_generated_snippets(config, resolved.worktree.slug)
     removed_logs = _remove_worktree_logs(workspace_root, resolved.worktree.slug)
     updated_state = remove_worktree(state, resolved.branch)
     save_state(state_path, updated_state)
-    reload_workspace_caddy(runner, config, workspace_root)
+    reload_workspace_caddy(runner)
     return RemoveWorktreePlan(
         branch=resolved.branch,
         worktree_path=worktree_path,
