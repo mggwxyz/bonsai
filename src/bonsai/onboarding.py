@@ -4,7 +4,7 @@ import json
 import re
 import tomllib
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -40,6 +40,61 @@ class StarterConfig:
     port_env: str
     base_port: int
     url: str
+
+
+def _starter_from_defaults(defaults: ProjectDefaults) -> StarterConfig:
+    return StarterConfig(
+        name=defaults.app_name,
+        base_branch=defaults.base_branch,
+        install_command=defaults.install_command,
+        setup_command=defaults.setup_command,
+        start_command=defaults.start_command,
+        symlink_env=defaults.has_env_file,
+        service_name=defaults.service_name,
+        port_env=defaults.port_env,
+        base_port=defaults.base_port,
+        url=defaults.url,
+    )
+
+
+def _display_optional(value: str | None) -> str:
+    return value if value else "not set"
+
+
+def _display_bool(value: bool) -> str:
+    return "yes" if value else "no"
+
+
+def render_onboarding_review(config: StarterConfig) -> str:
+    lines = [
+        "Review Bonsai setup",
+        "Choose a numbered section to edit it. Save when these values look right.",
+        "",
+        "[1] Project identity",
+        "    Controls the workspace name and the branch Bonsai treats as the base.",
+        f"    App name: {config.name}",
+        f"    Base branch: {config.base_branch}",
+        "",
+        "[2] Lifecycle commands",
+        "    Runs from each worktree while Bonsai prepares or starts the app.",
+        f"    Install: {_display_optional(config.install_command)}",
+        f"    Setup: {_display_optional(config.setup_command)}",
+        f"    Start: {_display_optional(config.start_command)}",
+        "",
+        "[3] Shared files",
+        "    Keeps local-only files such as .env available in every worktree.",
+        f"    Symlink .env: {_display_bool(config.symlink_env)}",
+        "",
+        "[4] Primary service",
+        "    Defines the service port and optional localhost URL template.",
+        f"    Service name: {config.service_name}",
+        f"    Port environment variable: {config.port_env}",
+        f"    Base port: {config.base_port}",
+        f"    Local URL template: {config.url}",
+        "",
+        "Save: press Enter or type s. Quit: type q.",
+    ]
+    return "\n".join(lines)
 
 
 def detect_project_defaults(
@@ -290,31 +345,120 @@ def prompt_starter_config(
     ask: Callable[..., str],
     confirm: Callable[[str], bool],
     ask_optional: Callable[[str, str | None], str | None],
+    say: Callable[[str], None] | None = None,
 ) -> StarterConfig:
-    app_name = ask("App name", default=defaults.app_name).strip()
-    base_branch = ask("Base branch", default=defaults.base_branch).strip()
-    install_command = ask_optional("Install command", defaults.install_command)
-    setup_command = ask_optional("Setup command", defaults.setup_command)
-    start_command = ask_optional("Start command", defaults.start_command)
-    symlink_env = confirm(
-        "Symlink .env into each worktree",
-        default=defaults.has_env_file,
+    write = say or (lambda _message: None)
+    config = _starter_from_defaults(defaults)
+
+    while True:
+        write(render_onboarding_review(config))
+        choice = str(
+            ask(
+                "Choose a section to edit",
+                default="s",
+                show_default=False,
+            )
+        ).strip().lower()
+        if choice in {"", "s", "save"}:
+            return config
+        if choice in {"q", "quit"}:
+            raise BonsaiConfigError("Setup cancelled")
+        if choice == "1":
+            config = _prompt_project_section(config, ask=ask, say=write)
+            continue
+        if choice == "2":
+            config = _prompt_commands_section(
+                config,
+                ask_optional=ask_optional,
+                say=write,
+            )
+            continue
+        if choice == "3":
+            config = _prompt_shared_files_section(
+                config,
+                confirm=confirm,
+                say=write,
+            )
+            continue
+        if choice == "4":
+            config = _prompt_service_section(config, ask=ask, say=write)
+            continue
+        write("Choose 1-4 to edit a section, s to save, or q to quit.")
+
+
+def _prompt_project_section(
+    config: StarterConfig,
+    *,
+    ask: Callable[..., str],
+    say: Callable[[str], None],
+) -> StarterConfig:
+    say(
+        "Project identity\n"
+        "This names the Bonsai workspace and records the branch new worktrees are based on."
     )
-    service_name = ask("Primary service name", default=defaults.service_name).strip()
-    port_env = ask("Port environment variable", default=defaults.port_env).strip()
-    base_port = ask("Base port", default=defaults.base_port, type=int)
-    url = ask("Local URL template", default=defaults.url).strip()
-    return StarterConfig(
-        name=app_name,
-        base_branch=base_branch,
-        install_command=install_command,
-        setup_command=setup_command,
-        start_command=start_command,
-        symlink_env=symlink_env,
-        service_name=service_name,
-        port_env=port_env,
-        base_port=base_port,
-        url=url,
+    return replace(
+        config,
+        name=str(ask("App name", default=config.name)).strip(),
+        base_branch=str(ask("Base branch", default=config.base_branch)).strip(),
+    )
+
+
+def _prompt_commands_section(
+    config: StarterConfig,
+    *,
+    ask_optional: Callable[[str, str | None], str | None],
+    say: Callable[[str], None],
+) -> StarterConfig:
+    say(
+        "Lifecycle commands\n"
+        "Install and setup run when Bonsai prepares worktrees. Start runs when you use "
+        "`bonsai start` or `bonsai up`. Leave a field blank to skip that command."
+    )
+    return replace(
+        config,
+        install_command=ask_optional("Install command", config.install_command),
+        setup_command=ask_optional("Setup command", config.setup_command),
+        start_command=ask_optional("Start command", config.start_command),
+    )
+
+
+def _prompt_shared_files_section(
+    config: StarterConfig,
+    *,
+    confirm: Callable[[str], bool],
+    say: Callable[[str], None],
+) -> StarterConfig:
+    say(
+        "Shared files\n"
+        "Bonsai can symlink .env into each worktree so local secrets stay outside git "
+        "but remain available to every branch checkout."
+    )
+    return replace(
+        config,
+        symlink_env=confirm(
+            "Symlink .env into each worktree",
+            default=config.symlink_env,
+        ),
+    )
+
+
+def _prompt_service_section(
+    config: StarterConfig,
+    *,
+    ask: Callable[..., str],
+    say: Callable[[str], None],
+) -> StarterConfig:
+    say(
+        "Primary service\n"
+        "The base port plus each worktree slot gives every branch a stable port. "
+        "The URL template can use ${slug} for branch-specific Caddy localhost routes."
+    )
+    return replace(
+        config,
+        service_name=str(ask("Primary service name", default=config.service_name)).strip(),
+        port_env=str(ask("Port environment variable", default=config.port_env)).strip(),
+        base_port=ask("Base port", default=config.base_port, type=int),
+        url=str(ask("Local URL template", default=config.url)).strip(),
     )
 
 
@@ -328,6 +472,7 @@ def write_guided_config(
     ask: Callable[..., str],
     confirm: Callable[..., bool],
     ask_optional: Callable[[str, str | None], str | None],
+    say: Callable[[str], None] | None = None,
 ) -> Path:
     if config_path.exists() and not force:
         raise BonsaiConfigError(f".bonsai.toml already exists at {config_path}")
@@ -337,6 +482,7 @@ def write_guided_config(
         ask=ask,
         confirm=confirm,
         ask_optional=ask_optional,
+        say=say,
     )
     config_path.parent.mkdir(parents=True, exist_ok=True)
     path = write_starter_config(config_path, config)

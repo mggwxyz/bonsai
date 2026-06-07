@@ -3,8 +3,11 @@ from pathlib import Path
 
 from bonsai.config import load_config
 from bonsai.onboarding import (
+    ProjectDefaults,
     StarterConfig,
     detect_project_defaults,
+    prompt_starter_config,
+    render_onboarding_review,
     render_starter_config,
     write_starter_config,
 )
@@ -23,6 +26,144 @@ def _starter_from_defaults(defaults: object) -> StarterConfig:
         base_port=defaults.base_port,
         url=defaults.url,
     )
+
+
+class ScriptedPrompts:
+    def __init__(self, answers: list[str]) -> None:
+        self.answers = answers
+        self.labels: list[str] = []
+        self.messages: list[str] = []
+
+    def ask(self, label: str, **kwargs):
+        self.labels.append(label)
+        answer = self.answers.pop(0)
+        value = kwargs.get("default") if answer == "" else answer
+        if kwargs.get("type") is int:
+            return int(value)
+        return value
+
+    def confirm(self, label: str, default: bool = False) -> bool:
+        self.labels.append(label)
+        answer = self.answers.pop(0)
+        if answer == "":
+            return default
+        return answer.lower() in {"1", "true", "t", "yes", "y"}
+
+    def ask_optional(self, label: str, default: str | None) -> str | None:
+        value = self.ask(label, default=default or "", show_default=bool(default)).strip()
+        return value or None
+
+    def say(self, message: str) -> None:
+        self.messages.append(message)
+
+
+def _defaults() -> ProjectDefaults:
+    return ProjectDefaults(
+        app_name="authentic",
+        base_branch="main",
+        install_command="pnpm install",
+        setup_command=None,
+        start_command="pnpm dev",
+        has_env_file=True,
+        service_name="frontend",
+        port_env="PORT",
+        base_port=3000,
+        url="https://${slug}.authentic.localhost",
+    )
+
+
+def test_render_onboarding_review_groups_values_with_explanations() -> None:
+    text = render_onboarding_review(_starter_from_defaults(_defaults()))
+
+    assert "Review Bonsai setup" in text
+    assert "[1] Project identity" in text
+    assert "Controls the workspace name and the branch Bonsai treats as the base" in text
+    assert "[2] Lifecycle commands" in text
+    assert "Runs from each worktree while Bonsai prepares or starts the app" in text
+    assert "[3] Shared files" in text
+    assert "Keeps local-only files such as .env available in every worktree" in text
+    assert "[4] Primary service" in text
+    assert "Defines the service port and optional localhost URL template" in text
+    assert "App name: authentic" in text
+    assert "Setup: not set" in text
+    assert "Save: press Enter or type s" in text
+
+
+def test_prompt_starter_config_can_save_detected_defaults_from_review() -> None:
+    prompts = ScriptedPrompts([""])
+
+    config = prompt_starter_config(
+        _defaults(),
+        ask=prompts.ask,
+        confirm=prompts.confirm,
+        ask_optional=prompts.ask_optional,
+        say=prompts.say,
+    )
+
+    assert config == _starter_from_defaults(_defaults())
+    assert prompts.labels == ["Choose a section to edit"]
+    assert any("Review Bonsai setup" in message for message in prompts.messages)
+
+
+def test_prompt_starter_config_edits_only_selected_command_section() -> None:
+    prompts = ScriptedPrompts(["2", "npm ci", "npm run db:setup", "npm run dev", "s"])
+
+    config = prompt_starter_config(
+        _defaults(),
+        ask=prompts.ask,
+        confirm=prompts.confirm,
+        ask_optional=prompts.ask_optional,
+        say=prompts.say,
+    )
+
+    assert config.name == "authentic"
+    assert config.base_branch == "main"
+    assert config.install_command == "npm ci"
+    assert config.setup_command == "npm run db:setup"
+    assert config.start_command == "npm run dev"
+    assert prompts.labels == [
+        "Choose a section to edit",
+        "Install command",
+        "Setup command",
+        "Start command",
+        "Choose a section to edit",
+    ]
+    assert any("Lifecycle commands" in message for message in prompts.messages)
+
+
+def test_prompt_starter_config_returns_to_review_after_service_edit() -> None:
+    prompts = ScriptedPrompts(
+        ["4", "web", "WEB_PORT", "4200", "https://${slug}.web.localhost", ""]
+    )
+
+    config = prompt_starter_config(
+        _defaults(),
+        ask=prompts.ask,
+        confirm=prompts.confirm,
+        ask_optional=prompts.ask_optional,
+        say=prompts.say,
+    )
+
+    assert config.service_name == "web"
+    assert config.port_env == "WEB_PORT"
+    assert config.base_port == 4200
+    assert config.url == "https://${slug}.web.localhost"
+    assert prompts.labels.count("Choose a section to edit") == 2
+
+
+def test_prompt_starter_config_rejects_unknown_review_choice() -> None:
+    prompts = ScriptedPrompts(["9", ""])
+
+    config = prompt_starter_config(
+        _defaults(),
+        ask=prompts.ask,
+        confirm=prompts.confirm,
+        ask_optional=prompts.ask_optional,
+        say=prompts.say,
+    )
+
+    assert config == _starter_from_defaults(_defaults())
+    assert "Choose 1-4 to edit a section, s to save, or q to quit." in prompts.messages
 
 
 def test_detect_project_defaults_uses_package_scripts_and_lockfile(tmp_path: Path) -> None:

@@ -10,7 +10,9 @@ Clone a repository into a Bonsai workspace:
 bonsai clone git@github.com:org/my-app.git my-app
 ```
 
-If Bonsai cannot find a `.bonsai.toml`, it starts a guided setup and writes a local workspace config.
+If Bonsai cannot find a `.bonsai.toml`, it starts a guided review menu,
+explains each setup section, lets you edit any section, and writes a local
+workspace config.
 
 Initialize an existing checkout that already has `.bonsai.toml`:
 

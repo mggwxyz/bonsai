@@ -309,6 +309,10 @@ def _optional_prompt(label: str, default: str | None) -> str | None:
     return value or None
 
 
+def _print_onboarding(message: str) -> None:
+    console.print(message, markup=False)
+
+
 def write_guided_config(
     config_path: Path,
     repo_path: Path,
@@ -325,6 +329,7 @@ def write_guided_config(
         ask=typer.prompt,
         confirm=typer.confirm,
         ask_optional=_optional_prompt,
+        say=_print_onboarding,
     )
 
 

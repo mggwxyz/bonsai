@@ -28,11 +28,16 @@ This runs preflight checks, clones the repo, guides you through config, offers s
 
 ### What you'll be asked
 
-**Guided config prompts** — Bonsai auto-detects your stack (Node/Python/Go/Rails/Docker Compose, etc.) and pre-fills what it can. You'll only be asked about values it can't infer:
+**Guided config review** — Bonsai auto-detects your stack
+(Node/Python/Go/Rails/Docker Compose, etc.) and opens a terminal review menu.
+Each section explains what the setting controls. Press Enter to save the
+detected values, or choose a section number to revise it and return to the
+review screen:
 
-- **Start command** — the command that runs your dev server (e.g. `npm dev`)
-- **Port** — the port your app listens on
-- **URL** — the local URL template (`https://${slug}.my-app.localhost` for Caddy, or left blank to use the port directly)
+- **Project identity** — workspace name and base branch
+- **Lifecycle commands** — install, setup, and start commands
+- **Shared files** — whether `.env` is symlinked into each worktree
+- **Primary service** — service name, port environment variable, base port, and local URL template
 
 **Shell integration offer** — asked once per machine. Accepting appends `eval "$(bonsai shell-init zsh)"` to `~/.zshrc`. After that you need to open a new shell (or `source ~/.zshrc`) before `bonsai checkout <branch>` can cd into a worktree.
 
@@ -127,9 +132,9 @@ my-app/main/.bonsai.toml
 
 Use the workspace root config for local-only Bonsai settings. Move or copy the
 file into the repo if teammates should share the same ports, commands, and URL
-templates. If no config exists during `bonsai clone`, Bonsai starts a short
-guided setup and writes a local workspace config before continuing. Use
-`--no-interactive` to fail instead of prompting.
+templates. If no config exists during `bonsai clone`, Bonsai starts a guided
+review menu, lets you edit any setup section, and writes a local workspace
+config before continuing. Use `--no-interactive` to fail instead of prompting.
 
 ```toml
 name = "my-app"

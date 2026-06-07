@@ -13,6 +13,11 @@ my-app/main/.bonsai.toml
 
 Use the workspace root config for local-only Bonsai settings. Move or copy the file into the repo when teammates should share the same ports, commands, and URL templates.
 
+When Bonsai creates this file interactively, it first shows a terminal review
+menu with explanations for project identity, lifecycle commands, shared files,
+and the primary service. Choose a section number to change those values, or save
+the detected defaults when they look right.
+
 ## Example
 
 ```toml
