@@ -20,6 +20,7 @@ from bonsai.git import (
     parse_default_branch,
     remote_branch_exists,
     remove_worktree,
+    repair_worktrees,
     worktree_has_changes,
 )
 from bonsai.models import (
@@ -214,6 +215,24 @@ def test_move_worktree_uses_git_worktree_move() -> None:
                 "move",
                 "/tmp/repo/mb-123-auth",
                 "/tmp/repo/MB-123-auth",
+            )
+        )
+    ]
+
+
+def test_repair_worktrees_runs_git_worktree_repair() -> None:
+    runner = RecordingRunner()
+
+    repair_worktrees(runner, Path("/tmp/repo/trunk"))
+
+    assert runner.commands == [
+        CommandSpec(
+            argv=(
+                "git",
+                "-C",
+                "/tmp/repo/trunk",
+                "worktree",
+                "repair",
             )
         )
     ]

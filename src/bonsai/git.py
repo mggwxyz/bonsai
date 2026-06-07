@@ -146,3 +146,10 @@ def move_worktree(
             str(target),
         ]
     )
+
+
+def repair_worktrees(
+    runner: Runner,
+    repo: Path,
+) -> None:
+    runner.run(["git", "-C", str(repo), "worktree", "repair"])
