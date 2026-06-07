@@ -835,7 +835,7 @@ def test_move_executes_workflow(monkeypatch, tmp_path: Path) -> None:
         calls.append(("find", path))
         return workspace_root
 
-    def fake_execute_move(runner, name: str, new_folder: str, root: Path):
+    def fake_execute_move(runner, name: str, new_folder: str, root: Path, *, force: bool = False):
         calls.append(("move", runner, name, new_folder, root))
         return SimpleNamespace(
             old_worktree_path=root / "mb-123-auth",
@@ -858,6 +858,37 @@ def test_move_executes_workflow(monkeypatch, tmp_path: Path) -> None:
     assert "Moved worktree:" in result.stdout
     assert "mb-123-auth" in result.stdout
     assert "MB-123-auth" in result.stdout
+
+
+def test_move_force_passes_force(monkeypatch, tmp_path: Path) -> None:
+    workspace_root = tmp_path / "bonsai-authentic"
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    def fake_find_workspace_root(path: Path) -> Path:
+        return workspace_root
+
+    def fake_execute_move(
+        runner, name: str, new_folder: str, root: Path, *, force: bool = False
+    ):
+        calls.append(("move", name, new_folder, root, force))
+        return SimpleNamespace(
+            old_worktree_path=root / "main",
+            new_worktree_path=root / "trunk",
+        )
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "find_workspace_root", fake_find_workspace_root)
+    monkeypatch.setattr(cli, "execute_move", fake_execute_move, raising=False)
+
+    with runner.isolated_filesystem():
+        result = runner.invoke(cli.app, ["move", "main", "trunk", "--force"])
+
+    assert result.exit_code == 0
+    assert calls == [("move", "main", "trunk", workspace_root, True)]
+    assert "Moved worktree:" in result.stdout
 
 
 def test_checkout_path_resolves_worktree_by_branch(monkeypatch, tmp_path: Path) -> None:

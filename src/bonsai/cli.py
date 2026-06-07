@@ -607,18 +607,26 @@ def remove_command(
 
 @app.command("move")
 def move_command(
-    name: Annotated[str, typer.Argument(autocompletion=_complete_managed_worktree_names_for_typer)],
+    name: Annotated[str, typer.Argument(autocompletion=_complete_worktree_names_for_typer)],
     new_folder: str,
+    force: Annotated[
+        bool,
+        typer.Option(
+            "--force",
+            help="Rename the default worktree (relocates the main tree, repairs secondaries).",
+        ),
+    ] = False,
 ) -> None:
     """Move a managed worktree folder.
 
     The worktree argument accepts a branch name, worktree directory, or worktree slug.
     Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and refreshes
-    generated files. The default worktree cannot be moved.
+    generated files. Renaming the default worktree relocates the main working tree
+    and repairs secondary worktrees; it requires `--force`.
     """
     try:
         root_path = find_workspace_root(Path.cwd())
-        plan = execute_move(SubprocessRunner(), name, new_folder, root_path)
+        plan = execute_move(SubprocessRunner(), name, new_folder, root_path, force=force)
         console.print(
             f"Moved worktree: {plan.old_worktree_path} -> {plan.new_worktree_path}"
         )
