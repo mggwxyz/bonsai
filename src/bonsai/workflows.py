@@ -396,35 +396,24 @@ def _paths_refer_to_same_existing_path(left: Path, right: Path) -> bool:
         return False
 
 
-def plan_move_worktree(
-    state: BonsaiState,
-    workspace_root: Path,
-    name: str,
-    new_folder: str,
-) -> MoveWorktreePlan:
-    safe_new_folder = _safe_path_segment(new_folder, "worktree folder")
-    default_names = {
+def _default_worktree_names(state: BonsaiState) -> set[str]:
+    return {
         state.default_branch,
         state.default_worktree,
         branch_slug(state.default_branch),
     }
-    if name in default_names:
-        raise BonsaiWorkspaceError("Cannot move the default worktree")
 
-    resolved = resolve_managed_worktree(state, name)
-    if resolved is None:
-        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
 
-    if resolved.worktree.path == safe_new_folder:
-        raise BonsaiWorkspaceError(f"Worktree already uses folder: {safe_new_folder}")
-
-    old_worktree_path = workspace_root / resolved.worktree.path
-    new_worktree_path = workspace_root / safe_new_folder
-    if safe_new_folder in default_names:
-        raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
-
+def _validate_move_target(
+    state: BonsaiState,
+    old_worktree_path: Path,
+    new_worktree_path: Path,
+    safe_new_folder: str,
+    *,
+    source_branch: str,
+) -> None:
     for branch, worktree in state.worktrees.items():
-        if branch == resolved.branch:
+        if branch == source_branch:
             continue
         if safe_new_folder in {branch, worktree.path, worktree.slug}:
             raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
@@ -438,6 +427,37 @@ def plan_move_worktree(
     )
     if (new_worktree_path.exists() or target_is_symlink) and not case_only_samefile_move:
         raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
+
+
+def plan_move_worktree(
+    state: BonsaiState,
+    workspace_root: Path,
+    name: str,
+    new_folder: str,
+) -> MoveWorktreePlan:
+    safe_new_folder = _safe_path_segment(new_folder, "worktree folder")
+    if name in _default_worktree_names(state):
+        raise BonsaiWorkspaceError("Cannot move the default worktree")
+
+    resolved = resolve_managed_worktree(state, name)
+    if resolved is None:
+        raise BonsaiWorkspaceError(f"Unknown worktree: {name}")
+
+    if resolved.worktree.path == safe_new_folder:
+        raise BonsaiWorkspaceError(f"Worktree already uses folder: {safe_new_folder}")
+
+    old_worktree_path = workspace_root / resolved.worktree.path
+    new_worktree_path = workspace_root / safe_new_folder
+    if safe_new_folder in _default_worktree_names(state):
+        raise BonsaiWorkspaceError(f"Worktree target already exists: {new_worktree_path}")
+
+    _validate_move_target(
+        state,
+        old_worktree_path,
+        new_worktree_path,
+        safe_new_folder,
+        source_branch=resolved.branch,
+    )
 
     updated_worktree = replace(resolved.worktree, path=safe_new_folder)
     return MoveWorktreePlan(
