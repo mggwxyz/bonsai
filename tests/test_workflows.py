@@ -34,7 +34,7 @@ from bonsai.models import (
     SharedFileConfig,
 )
 from bonsai.ports import allocate_slot
-from bonsai.process import RecordingRunner
+from bonsai.process import RecordingRunner, SubprocessRunner
 from bonsai.rendering import render_root_caddyfile
 from bonsai.state import load_state, save_state
 from bonsai.workflows import (
@@ -52,6 +52,7 @@ from bonsai.workflows import (
     execute_move,
     execute_port_repairs,
     execute_remove,
+    execute_rename_default,
     execute_repair,
     execute_start,
     execute_stop_processes,
@@ -3816,6 +3817,141 @@ def test_execute_move_uses_temporary_path_for_case_only_rename(
         )
     ) in runner.commands
     assert new_worktree.exists()
+
+
+def test_execute_rename_default_relocates_repairs_and_syncs(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        'value = "authentic-${slug}"',
+        'value = "${WORKTREE_PATH}"',
+    )
+    write_config(default_worktree, config_text)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    runner = RecordingRunner()
+
+    plan = execute_rename_default(runner, workspace_root, "trunk")
+
+    new_default = workspace_root / "trunk"
+    assert plan.old_worktree_path == default_worktree
+    assert plan.new_worktree_path == new_default
+    assert not default_worktree.exists()
+    assert new_default.is_dir()
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.default_worktree == "trunk"
+    assert state.default_branch == "main"
+    assert CommandSpec(
+        argv=("git", "-C", str(new_default), "worktree", "repair")
+    ) in runner.commands
+    assert f"COMPOSE_PROJECT_NAME={new_default}" in (
+        new_default / ".env.local"
+    ).read_text(encoding="utf-8")
+
+
+def test_execute_rename_default_repairs_real_secondary_worktree(tmp_path: Path) -> None:
+    if shutil.which("git") is None:
+        pytest.skip("git not installed")
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+
+    def git(repo: Path, *args: str) -> None:
+        subprocess.run(
+            ["git", "-C", str(repo), *args],
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+    subprocess.run(
+        ["git", "init", "-b", "main", str(default_worktree)],
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    git(default_worktree, "config", "user.email", "test@example.com")
+    git(default_worktree, "config", "user.name", "Test")
+    (default_worktree / "README.md").write_text("hi\n", encoding="utf-8")
+    git(default_worktree, "add", "-A")
+    git(default_worktree, "commit", "-m", "init")
+    secondary = workspace_root / "feature"
+    git(default_worktree, "worktree", "add", "-b", "feature", str(secondary))
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+            },
+        ),
+    )
+
+    execute_rename_default(SubprocessRunner(), workspace_root, "trunk")
+
+    assert not default_worktree.exists()
+    assert (workspace_root / "trunk").is_dir()
+    status = subprocess.run(
+        ["git", "-C", str(secondary), "status", "--porcelain"],
+        capture_output=True,
+        text=True,
+    )
+    assert status.returncode == 0, status.stderr
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    assert state.default_worktree == "trunk"
+    assert "feature" in state.worktrees
+
+
+def test_execute_rename_default_uses_temporary_path_for_case_only_rename(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    new_default = workspace_root / "Main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    monkeypatch.setattr(
+        "bonsai.workflows._paths_refer_to_same_existing_path",
+        lambda left, right: left == default_worktree and right == new_default,
+    )
+    runner = RecordingRunner()
+
+    plan = execute_rename_default(runner, workspace_root, "Main")
+
+    assert plan.new_worktree_path == new_default
+    assert load_state(
+        workspace_root / ".bonsai" / "state.json"
+    ).default_worktree == "Main"
+    assert CommandSpec(
+        argv=("git", "-C", str(new_default), "worktree", "repair")
+    ) in runner.commands
 
 
 def test_execute_add_keeps_existing_correct_shared_file_symlink_on_repair(

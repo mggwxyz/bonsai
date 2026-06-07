@@ -37,6 +37,7 @@ from bonsai.git import (
     list_worktrees,
     remote_branch_exists,
     remote_origin_url,
+    repair_worktrees,
     worktree_has_changes,
 )
 from bonsai.git import (
@@ -2778,6 +2779,37 @@ def execute_move(
     default_worktree = workspace_root / state.default_worktree
     plan = plan_move_worktree(state, workspace_root, name, new_folder)
     _move_git_worktree_path(runner, default_worktree, workspace_root, plan)
+    save_state(state_path, plan.updated_state)
+    execute_sync(runner, workspace_root, apply=True)
+    return plan
+
+
+def _relocate_default_worktree(
+    runner: Runner,
+    workspace_root: Path,
+    plan: MoveWorktreePlan,
+) -> None:
+    if _paths_refer_to_same_existing_path(
+        plan.old_worktree_path,
+        plan.new_worktree_path,
+    ):
+        temp_path = _next_move_temp_path(workspace_root, plan.new_worktree_path.name)
+        shutil.move(str(plan.old_worktree_path), str(temp_path))
+        shutil.move(str(temp_path), str(plan.new_worktree_path))
+    else:
+        shutil.move(str(plan.old_worktree_path), str(plan.new_worktree_path))
+    repair_worktrees(runner, plan.new_worktree_path)
+
+
+def execute_rename_default(
+    runner: Runner,
+    workspace_root: Path,
+    new_folder: str,
+) -> MoveWorktreePlan:
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    plan = plan_rename_default(state, workspace_root, new_folder)
+    _relocate_default_worktree(runner, workspace_root, plan)
     save_state(state_path, plan.updated_state)
     execute_sync(runner, workspace_root, apply=True)
     return plan
