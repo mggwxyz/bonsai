@@ -468,6 +468,33 @@ def plan_move_worktree(
     )
 
 
+def plan_rename_default(
+    state: BonsaiState,
+    workspace_root: Path,
+    new_folder: str,
+) -> MoveWorktreePlan:
+    safe_new_folder = _safe_path_segment(new_folder, "worktree folder")
+    if safe_new_folder == state.default_worktree:
+        raise BonsaiWorkspaceError(f"Worktree already uses folder: {safe_new_folder}")
+
+    old_worktree_path = workspace_root / state.default_worktree
+    new_worktree_path = workspace_root / safe_new_folder
+    _validate_move_target(
+        state,
+        old_worktree_path,
+        new_worktree_path,
+        safe_new_folder,
+        source_branch=state.default_branch,
+    )
+
+    return MoveWorktreePlan(
+        branch=state.default_branch,
+        old_worktree_path=old_worktree_path,
+        new_worktree_path=new_worktree_path,
+        updated_state=replace(state, default_worktree=safe_new_folder),
+    )
+
+
 def _remove_generated_snippets(
     config: BonsaiConfig,
     slug: str,

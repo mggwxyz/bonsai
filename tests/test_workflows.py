@@ -66,6 +66,7 @@ from bonsai.workflows import (
     plan_move_worktree,
     plan_open_url,
     plan_open_url_for_worktree,
+    plan_rename_default,
     plan_repair,
     plan_stop_processes,
     plan_sync,
@@ -741,6 +742,74 @@ def test_plan_move_worktree_rejects_same_folder_name(tmp_path: Path) -> None:
 
     with pytest.raises(BonsaiWorkspaceError, match="Worktree already uses folder"):
         plan_move_worktree(state, workspace_root, "feature", "feature")
+
+
+def test_plan_rename_default_updates_default_worktree(tmp_path: Path) -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "MB-1": ManagedWorktree(path="mb-1", slug="mb-1", slot=1),
+        },
+    )
+
+    plan = plan_rename_default(state, tmp_path / "authentic", "trunk")
+
+    assert plan.branch == "main"
+    assert plan.old_worktree_path == tmp_path / "authentic" / "main"
+    assert plan.new_worktree_path == tmp_path / "authentic" / "trunk"
+    assert plan.updated_state.default_worktree == "trunk"
+    assert plan.updated_state.default_branch == "main"
+    assert plan.updated_state.worktrees == state.worktrees
+
+
+def test_plan_rename_default_rejects_same_folder(tmp_path: Path) -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree already uses folder: main"):
+        plan_rename_default(state, tmp_path / "authentic", "main")
+
+
+def test_plan_rename_default_rejects_collision_with_secondary(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "feature").mkdir(parents=True)
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={
+            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
+        },
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Worktree target already exists"):
+        plan_rename_default(state, workspace_root, "feature")
+
+
+def test_plan_rename_default_rejects_unsafe_folder(tmp_path: Path) -> None:
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="Invalid worktree folder"):
+        plan_rename_default(state, tmp_path / "authentic", "../escape")
 
 
 def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> None:
