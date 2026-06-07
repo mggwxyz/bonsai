@@ -2773,9 +2773,18 @@ def execute_move(
     name: str,
     new_folder: str,
     workspace_root: Path,
+    *,
+    force: bool = False,
 ) -> MoveWorktreePlan:
     state_path = workspace_root / ".bonsai" / "state.json"
     state = load_state(state_path)
+    if name in _default_worktree_names(state):
+        if not force:
+            raise BonsaiWorkspaceError(
+                "Renaming the default worktree re-points all secondary worktrees "
+                "and rewrites generated files; pass --force to proceed."
+            )
+        return execute_rename_default(runner, workspace_root, new_folder)
     default_worktree = workspace_root / state.default_worktree
     plan = plan_move_worktree(state, workspace_root, name, new_folder)
     _move_git_worktree_path(runner, default_worktree, workspace_root, plan)

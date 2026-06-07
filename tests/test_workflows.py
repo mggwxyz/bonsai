@@ -3819,6 +3819,67 @@ def test_execute_move_uses_temporary_path_for_case_only_rename(
     assert new_worktree.exists()
 
 
+def test_execute_move_default_without_force_raises_and_changes_nothing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    with pytest.raises(BonsaiWorkspaceError, match="pass --force"):
+        execute_move(RecordingRunner(), "main", "trunk", workspace_root)
+
+    assert default_worktree.exists()
+    assert not (workspace_root / "trunk").exists()
+    assert load_state(
+        workspace_root / ".bonsai" / "state.json"
+    ).default_worktree == "main"
+
+
+def test_execute_move_default_with_force_renames(tmp_path: Path) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+    runner = RecordingRunner()
+
+    plan = execute_move(runner, "main", "trunk", workspace_root, force=True)
+
+    new_default = workspace_root / "trunk"
+    assert plan.new_worktree_path == new_default
+    assert not default_worktree.exists()
+    assert new_default.is_dir()
+    assert load_state(
+        workspace_root / ".bonsai" / "state.json"
+    ).default_worktree == "trunk"
+    assert CommandSpec(
+        argv=("git", "-C", str(new_default), "worktree", "repair")
+    ) in runner.commands
+
+
 def test_execute_rename_default_relocates_repairs_and_syncs(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
