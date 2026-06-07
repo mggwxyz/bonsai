@@ -130,7 +130,8 @@ Move a managed worktree folder.
 
 The worktree argument accepts a branch name, worktree directory, or worktree slug.
 Bonsai runs `git worktree move`, updates `.bonsai/state.json`, and refreshes
-generated files. The default worktree cannot be moved.
+generated files. Renaming the default worktree relocates the main working tree
+and repairs secondary worktrees; it requires `--force`.
 
 **Usage**:
 
@@ -145,6 +146,7 @@ $ bonsai move [OPTIONS] NAME NEW_FOLDER
 
 **Options**:
 
+* `--force`: Rename the default worktree (relocates the main tree, repairs secondaries).
 * `--help`: Show this message and exit.
 
 ## `bonsai checkout`

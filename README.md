@@ -310,8 +310,10 @@ removal stops before the git worktree is removed.
 `bonsai move <worktree> <new-folder>` renames a managed worktree directory.
 The lookup accepts a branch name, worktree directory, or worktree slug. Bonsai
 uses `git worktree move` underneath, updates `.bonsai/state.json`, and rewrites
-generated files so path-dependent template values stay current. The default
-worktree cannot be moved.
+generated files so path-dependent template values stay current. Renaming the
+default worktree requires `--force`: because `git worktree move` cannot relocate
+the main working tree, Bonsai moves the directory and runs `git worktree repair`
+to re-point every secondary worktree.
 
 `bonsai cleanup` is PR-aware cleanup for managed branch worktrees. It requires
 the GitHub CLI (`gh`) to be installed and authenticated, checks each managed
