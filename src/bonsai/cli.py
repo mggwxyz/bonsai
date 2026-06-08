@@ -4,6 +4,7 @@ import os
 import shlex
 import shutil
 import subprocess
+import sys
 import uuid
 import webbrowser
 from collections.abc import Callable, Mapping
@@ -347,6 +348,28 @@ def _extension_entry_url(plan: OpenUrlPlan, label: str) -> str:
     return f"chrome-extension://{plan.browser_extension_id}/entry.html#{encoded}"
 
 
+def _open_extension_entry_url(entry_url: str) -> None:
+    if sys.platform == "darwin":
+        command = ["/usr/bin/open", "-b", "com.google.Chrome", entry_url]
+        try:
+            result = subprocess.run(command, check=False, capture_output=True, text=True)
+        except OSError as exc:
+            raise BonsaiWorkspaceError(
+                f"Failed to open extension entry URL with Google Chrome: {entry_url}"
+            ) from exc
+        if result.returncode != 0:
+            detail = result.stderr.strip()
+            suffix = f": {detail}" if detail else ""
+            raise BonsaiWorkspaceError(
+                "Failed to open extension entry URL with Google Chrome "
+                f"(exit {result.returncode}){suffix}"
+            )
+        return
+
+    if not webbrowser.open(entry_url):
+        raise BonsaiWorkspaceError(f"Failed to open extension entry URL: {entry_url}")
+
+
 def _open_labeled_url(plan: OpenUrlPlan, label: str) -> None:
     if plan.browser_extension_id is None:
         raise BonsaiWorkspaceError(EXTENSION_SETUP_ERROR)
@@ -358,8 +381,7 @@ def _open_labeled_url(plan: OpenUrlPlan, label: str) -> None:
             f"run `bonsai up {target.branch}` then `bonsai open {target.branch}`."
         )
         raise typer.Exit(code=1)
-    if not webbrowser.open(entry_url):
-        raise BonsaiWorkspaceError(f"Failed to open extension entry URL: {entry_url}")
+    _open_extension_entry_url(entry_url)
     console.print(f"Opened labeled tab for {target.url}")
 
 

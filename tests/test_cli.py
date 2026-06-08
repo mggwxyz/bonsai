@@ -1098,7 +1098,7 @@ url = "https://api-${slug}.authentic.localhost"
 def test_open_label_opens_extension_entry_url(monkeypatch, tmp_path: Path) -> None:
     _write_labeled_open_workspace(tmp_path)
     opened_urls: list[str] = []
-    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(cli, "_open_extension_entry_url", lambda url: opened_urls.append(url))
     monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
     monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
     monkeypatch.chdir(tmp_path / "main")
@@ -1121,6 +1121,58 @@ def test_open_label_opens_extension_entry_url(monkeypatch, tmp_path: Path) -> No
     assert isinstance(payload["requestId"], str)
     assert payload["createdAt"].endswith("Z")
     assert "Opened labeled tab for https://ma-123-test.authentic.localhost" in result.stdout
+
+
+def test_open_label_uses_chrome_bundle_opener_on_macos(monkeypatch, tmp_path: Path) -> None:
+    _write_labeled_open_workspace(tmp_path)
+    commands: list[list[str]] = []
+
+    def fake_run(argv, **_kwargs):
+        commands.append(argv)
+        return SimpleNamespace(returncode=0, stderr="")
+
+    def fail_browser(_url):
+        raise AssertionError("chrome-extension URLs must not use the default browser opener")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["open", "ma-123-test", "--label", "Feature tab"])
+
+    assert result.exit_code == 0
+    assert len(commands) == 1
+    assert commands[0][:3] == ["/usr/bin/open", "-b", "com.google.Chrome"]
+    entry_url, payload = _decode_extension_entry_url(commands[0][3])
+    assert entry_url == "chrome-extension://abcdefghijklmnopabcdefghijklmnop/entry.html"
+    assert payload["label"] == "Feature tab"
+
+
+def test_open_label_reports_chrome_opener_failure_on_macos(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_labeled_open_workspace(tmp_path)
+
+    def fake_run(_argv, **_kwargs):
+        return SimpleNamespace(returncode=1, stderr="Chrome is not available")
+
+    monkeypatch.setattr(sys, "platform", "darwin")
+    monkeypatch.setattr(cli.subprocess, "run", fake_run)
+    monkeypatch.setattr(cli.webbrowser, "open", lambda _url: True)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["open", "ma-123-test", "--label", "Feature tab"])
+
+    assert result.exit_code == 1
+    assert "Failed to open extension entry URL with Google Chrome" in result.stdout
+    assert "Chrome is not available" in result.stdout
+    assert "Opened labeled tab" not in result.stdout
 
 
 def test_open_label_requires_configured_extension_id(monkeypatch, tmp_path: Path) -> None:
