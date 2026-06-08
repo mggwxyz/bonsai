@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "bonsai"
-version = "0.4.1"
+version = "0.5.0"
 description = "Manage per-branch git worktrees with ports and Caddy URLs"
 readme = "README.md"
 requires-python = ">=3.12"
