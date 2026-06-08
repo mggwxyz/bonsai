@@ -34,7 +34,7 @@ from bonsai.models import (
     SharedFileConfig,
 )
 from bonsai.ports import allocate_slot
-from bonsai.process import RecordingRunner, SubprocessRunner
+from bonsai.process import RecordingRunner
 from bonsai.rendering import render_root_caddyfile
 from bonsai.state import load_state, save_state
 from bonsai.workflows import (
@@ -286,6 +286,45 @@ class SelectiveGitWorktreeRunner(RecordingRunner):
             if repo in self.git_worktrees:
                 return CommandResult(returncode=0, stdout="true\n")
             return CommandResult(returncode=128, stderr="not a git worktree\n")
+        return CommandResult(returncode=0)
+
+
+class RealGitHermeticCaddyRunner(RecordingRunner):
+    def __init__(self, brew_prefix: Path) -> None:
+        super().__init__()
+        self.brew_prefix = brew_prefix
+
+    def run(
+        self,
+        argv: list[str],
+        cwd: Path | None = None,
+        check: bool = True,
+        env: dict[str, str] | None = None,
+    ) -> CommandResult:
+        self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+        if argv[:2] == ["caddy", "version"]:
+            return CommandResult(returncode=0, stdout="v2.11.4\n")
+        if argv[:2] == ["brew", "--prefix"]:
+            return CommandResult(returncode=0, stdout=f"{self.brew_prefix}\n")
+        if argv[:2] == ["caddy", "reload"]:
+            return CommandResult(returncode=0)
+        if argv and argv[0] == "git":
+            completed = subprocess.run(
+                argv,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                check=False,
+                env=env,
+            )
+            result = CommandResult(
+                returncode=completed.returncode,
+                stdout=completed.stdout,
+                stderr=completed.stderr,
+            )
+            if check and result.returncode != 0:
+                raise BonsaiCommandError(result.stderr)
+            return result
         return CommandResult(returncode=0)
 
 
@@ -3925,6 +3964,7 @@ def test_execute_rename_default_repairs_real_secondary_worktree(tmp_path: Path) 
         pytest.skip("git not installed")
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
+    brew_prefix = tmp_path / "brew"
     default_worktree.mkdir(parents=True)
 
     def git(repo: Path, *args: str) -> None:
@@ -3963,7 +4003,9 @@ def test_execute_rename_default_repairs_real_secondary_worktree(tmp_path: Path) 
         ),
     )
 
-    execute_rename_default(SubprocessRunner(), workspace_root, "trunk")
+    runner = RealGitHermeticCaddyRunner(brew_prefix)
+
+    execute_rename_default(runner, workspace_root, "trunk")
 
     assert not default_worktree.exists()
     assert (workspace_root / "trunk").is_dir()
@@ -3976,6 +4018,16 @@ def test_execute_rename_default_repairs_real_secondary_worktree(tmp_path: Path) 
     state = load_state(workspace_root / ".bonsai" / "state.json")
     assert state.default_worktree == "trunk"
     assert "feature" in state.worktrees
+    boot_caddyfile = brew_prefix / "etc" / "Caddyfile"
+    assert boot_caddyfile.exists()
+    assert (
+        f"import {Path.home() / '.bonsai' / 'caddy.d' / 'authentic'}/*.caddy"
+        in boot_caddyfile.read_text(encoding="utf-8")
+    )
+    assert CommandSpec(argv=("brew", "--prefix")) in runner.commands
+    assert CommandSpec(
+        argv=("caddy", "reload", "--config", str(Path.home() / ".bonsai" / "Caddyfile"))
+    ) in runner.commands
 
 
 def test_execute_rename_default_uses_temporary_path_for_case_only_rename(
