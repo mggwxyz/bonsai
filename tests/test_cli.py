@@ -1,3 +1,4 @@
+import base64
 import json
 import shutil
 import subprocess
@@ -1094,6 +1095,176 @@ url = "https://api-${slug}.authentic.localhost"
     assert "Opened https://api-ma-123-test.authentic.localhost" in result.stdout
 
 
+def test_open_label_opens_extension_entry_url(monkeypatch, tmp_path: Path) -> None:
+    _write_labeled_open_workspace(tmp_path)
+    opened_urls: list[str] = []
+    monkeypatch.setattr(cli.webbrowser, "open", lambda url: opened_urls.append(url) or True)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", lambda _plan: True, raising=False)
+    monkeypatch.chdir(tmp_path / "main")
+
+    result = runner.invoke(cli.app, ["open", "ma-123-test", "--label", " Feature tab "])
+
+    assert result.exit_code == 0
+    assert len(opened_urls) == 1
+    entry_url, payload = _decode_extension_entry_url(opened_urls[0])
+    assert entry_url == "chrome-extension://abcdefghijklmnopabcdefghijklmnop/entry.html"
+    assert payload["schema"] == "dev-web-extension.openTab.v1"
+    assert payload["source"] == "bonsai"
+    assert payload["url"] == "https://ma-123-test.authentic.localhost"
+    assert payload["label"] == "Feature tab"
+    assert payload["workspace"] == "authentic"
+    assert payload["branch"] == "MA-123-test"
+    assert payload["worktreePath"] == str(tmp_path / "ma-123-test")
+    assert payload["service"] == "frontend"
+    assert payload["port"] == 4201
+    assert isinstance(payload["requestId"], str)
+    assert payload["createdAt"].endswith("Z")
+    assert "Opened labeled tab for https://ma-123-test.authentic.localhost" in result.stdout
+
+
+def test_open_label_requires_configured_extension_id(monkeypatch, tmp_path: Path) -> None:
+    _write_primary_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("browser must not open without extension configuration")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open", "--label", "Feature tab"])
+
+    assert result.exit_code == 1
+    assert "Browser extension labeling requires [browser_extension].extension_id" in result.stdout
+
+
+@pytest.mark.parametrize(
+    ("label", "message"),
+    [
+        (" ", "Tab label must be non-empty"),
+        ("Feature\ntab", "Tab label must be a single line"),
+        ("x" * 81, "Tab label must be at most 80 characters"),
+    ],
+)
+def test_open_label_rejects_invalid_label(
+    monkeypatch,
+    tmp_path: Path,
+    label: str,
+    message: str,
+) -> None:
+    _write_labeled_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("invalid labels must not open a browser")
+
+    def fail_liveness(_plan):
+        raise AssertionError("invalid labels must not run a liveness probe")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open", "--label", label, "--no-interactive"])
+
+    assert result.exit_code == 1
+    assert message in result.stdout
+
+
+def test_open_label_no_interactive_prints_extension_url_without_probing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_labeled_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("--no-interactive must not open a browser")
+
+    def fail_liveness(_plan):
+        raise AssertionError("--no-interactive must not gate on a liveness probe")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
+
+    assert result.exit_code == 0
+    entry_url, payload = _decode_extension_entry_url(result.stdout.strip())
+    assert entry_url == "chrome-extension://abcdefghijklmnopabcdefghijklmnop/entry.html"
+    assert payload["label"] == "Feature tab"
+    assert payload["url"] == "https://ma-123-test.authentic.localhost"
+
+
+def test_open_label_no_interactive_prints_resolved_extension_url_without_probing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_labeled_open_workspace(tmp_path)
+
+    def fake_resolve(plan):
+        return OpenUrlPlan(
+            branch=plan.branch,
+            worktree_path=plan.worktree_path,
+            url=f"http://localhost:{plan.port}",
+            service_name=plan.service_name,
+            port=plan.port,
+            workspace_name=plan.workspace_name,
+            browser_extension_id=plan.browser_extension_id,
+            via="port",
+        )
+
+    def fail_browser(_url):
+        raise AssertionError("--no-interactive must not open a browser")
+
+    def fail_liveness(_plan):
+        raise AssertionError("--no-interactive must not gate on a liveness probe")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", fake_resolve, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
+
+    assert result.exit_code == 0
+    _entry_url, payload = _decode_extension_entry_url(result.stdout.strip())
+    assert payload["url"] == "http://localhost:4201"
+
+
+def test_open_label_no_interactive_prints_long_extension_url_on_one_line(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _write_labeled_open_workspace(tmp_path)
+
+    def fail_browser(_url):
+        raise AssertionError("--no-interactive must not open a browser")
+
+    def fail_liveness(_plan):
+        raise AssertionError("--no-interactive must not gate on a liveness probe")
+
+    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
+    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
+    monkeypatch.chdir(tmp_path / "ma-123-test")
+
+    result = runner.invoke(
+        cli.app,
+        [
+            "open",
+            "--label",
+            "Feature tab with a deliberately long readable label",
+            "--no-interactive",
+        ],
+    )
+
+    assert result.exit_code == 0
+    assert len(result.stdout) > 200
+    assert result.stdout.count("\n") == 1
+    _decode_extension_entry_url(result.stdout.strip())
+
+
 def _write_primary_open_workspace(tmp_path: Path) -> None:
     write_checkout_workspace(tmp_path)
     config_path = tmp_path / "main" / ".bonsai.toml"
@@ -1111,6 +1282,35 @@ url = "https://${slug}.authentic.localhost"
 """,
         encoding="utf-8",
     )
+
+
+def _write_labeled_open_workspace(tmp_path: Path) -> None:
+    write_checkout_workspace(tmp_path)
+    config_path = tmp_path / "main" / ".bonsai.toml"
+    config_path.write_text(
+        """
+name = "authentic"
+base_branch = "main"
+
+[browser_extension]
+extension_id = "abcdefghijklmnopabcdefghijklmnop"
+
+[[services]]
+name = "frontend"
+port_env = "FRONTEND_PORT"
+base_port = 4200
+primary = true
+url = "https://${slug}.authentic.localhost"
+""",
+        encoding="utf-8",
+    )
+
+
+def _decode_extension_entry_url(url: str) -> tuple[str, dict]:
+    entry_url, encoded = url.split("#", maxsplit=1)
+    padded = encoded + ("=" * (-len(encoded) % 4))
+    payload = json.loads(base64.urlsafe_b64decode(padded.encode()).decode())
+    return entry_url, payload
 
 
 def test_open_demotes_to_port_url_when_caddy_down(monkeypatch, tmp_path: Path) -> None:

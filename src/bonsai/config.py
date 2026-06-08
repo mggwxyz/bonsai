@@ -7,6 +7,7 @@ from typing import Any
 from bonsai.errors import BonsaiConfigError
 from bonsai.models import (
     BonsaiConfig,
+    BrowserExtensionConfig,
     CaddyConfig,
     CommandsConfig,
     EnvConfig,
@@ -31,6 +32,7 @@ def load_config(path: Path) -> BonsaiConfig:
         workspace=_workspace(_optional_table(raw, "workspace")),
         caddy=_caddy(_optional_table(raw, "caddy")),
         commands=_commands(_optional_table(raw, "commands")),
+        browser_extension=_browser_extension(_optional_table(raw, "browser_extension")),
         shared_files=tuple(_shared_file(item) for item in _array_of_tables(raw, "shared_files")),
         env=tuple(_env(item) for item in _array_of_tables(raw, "env")),
         services=tuple(_service(item) for item in _array_of_tables(raw, "services")),
@@ -115,6 +117,23 @@ def _commands(raw: dict[str, Any]) -> CommandsConfig:
         start=_optional_str(raw, "start"),
         poststart=_optional_str(raw, "poststart"),
     )
+
+
+def _browser_extension(raw: dict[str, Any]) -> BrowserExtensionConfig:
+    value = raw.get("extension_id")
+    if value is None:
+        return BrowserExtensionConfig()
+    if not isinstance(value, str) or not value.strip():
+        raise BonsaiConfigError(
+            "Config key browser_extension.extension_id must be a 32-character "
+            "Chrome extension ID using lowercase a-p"
+        )
+    if len(value) != 32 or any(char < "a" or char > "p" for char in value):
+        raise BonsaiConfigError(
+            "Config key browser_extension.extension_id must be a 32-character "
+            "Chrome extension ID using lowercase a-p"
+        )
+    return BrowserExtensionConfig(extension_id=value)
 
 
 def _shared_file(raw: dict[str, Any]) -> SharedFileConfig:

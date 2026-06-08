@@ -75,6 +75,66 @@ def test_load_config_parses_valid_file(tmp_path: Path) -> None:
     assert [service.name for service in config.services] == ["frontend", "api", "db"]
     assert config.services[0].base_port == 4200
     assert config.primary_service().name == "frontend"
+    assert config.browser_extension.extension_id is None
+
+
+def test_load_config_parses_browser_extension_id(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace(
+        "[commands]\ninstall = \"yarn install\"",
+        "\n".join(
+            [
+                "[browser_extension]",
+                'extension_id = "abcdefghijklmnopabcdefghijklmnop"',
+                "",
+                "[commands]",
+                'install = "yarn install"',
+            ]
+        ),
+    )
+
+    config = load_config(write_config(tmp_path, text))
+
+    assert config.browser_extension.extension_id == "abcdefghijklmnopabcdefghijklmnop"
+
+
+@pytest.mark.parametrize(
+    "extension_id",
+    [
+        "",
+        "abcdefghijklmnopabcdefghijklmnopa",
+        "ABCDEFGHIJKLMNOPABCDEFGHIJKLMNOP",
+        "abcdefghijklmnopabcdefghijklmnoq",
+    ],
+)
+def test_browser_extension_id_must_be_a_chrome_extension_id(
+    tmp_path: Path,
+    extension_id: str,
+) -> None:
+    text = VALID_CONFIG.replace(
+        "[commands]\ninstall = \"yarn install\"",
+        "\n".join(
+            [
+                "[browser_extension]",
+                f'extension_id = "{extension_id}"',
+                "",
+                "[commands]",
+                'install = "yarn install"',
+            ]
+        ),
+    )
+
+    with pytest.raises(BonsaiConfigError, match="browser_extension.extension_id"):
+        load_config(write_config(tmp_path, text))
+
+
+def test_browser_extension_id_must_be_a_string(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace(
+        "[commands]\ninstall = \"yarn install\"",
+        "[browser_extension]\nextension_id = 123\n\n[commands]\ninstall = \"yarn install\"",
+    )
+
+    with pytest.raises(BonsaiConfigError, match="browser_extension.extension_id"):
+        load_config(write_config(tmp_path, text))
 
 
 def test_load_config_parses_optional_pre_and_post_commands(tmp_path: Path) -> None:

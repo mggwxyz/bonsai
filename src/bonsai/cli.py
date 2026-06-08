@@ -1,14 +1,19 @@
+import base64
+import json
 import os
 import shlex
 import shutil
 import subprocess
+import uuid
 import webbrowser
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
 import typer
 from rich.console import Console
+from rich.markup import escape
 
 from bonsai import __version__
 from bonsai.agent import render_agent_context
@@ -72,6 +77,13 @@ from bonsai.workspace import find_workspace_root
 
 console = Console(width=200)
 app = typer.Typer(help="Manage git worktree development workspaces.")
+EXTENSION_SCHEMA = "dev-web-extension.openTab.v1"
+EXTENSION_SETUP_ERROR = (
+    "Browser extension labeling requires [browser_extension].extension_id in .bonsai.toml. "
+    "Load the dev-web-extension unpacked extension in Chrome, copy its ID from "
+    "chrome://extensions, "
+    "then set browser_extension.extension_id."
+)
 
 ZSH_SHELL_INIT = """bonsai() {
   local bonsai_bin="${commands[bonsai]}"
@@ -168,7 +180,7 @@ def root(
 
 
 def _fail(error: BonsaiError) -> None:
-    console.print(f"[red]Error:[/red] {error}")
+    console.print(f"[red]Error:[/red] {escape(str(error))}")
     raise typer.Exit(code=1)
 
 
@@ -298,6 +310,57 @@ def _open_url(plan: OpenUrlPlan) -> None:
     if not webbrowser.open(target.url):
         raise BonsaiWorkspaceError(f"Failed to open URL: {target.url}")
     console.print(f"Opened {target.url}")
+
+
+def _normalize_tab_label(label: str) -> str:
+    normalized = label.strip()
+    if not normalized:
+        raise BonsaiWorkspaceError("Tab label must be non-empty")
+    if "\n" in normalized or "\r" in normalized:
+        raise BonsaiWorkspaceError("Tab label must be a single line")
+    if len(normalized) > 80:
+        raise BonsaiWorkspaceError("Tab label must be at most 80 characters")
+    return normalized
+
+
+def _extension_entry_url(plan: OpenUrlPlan, label: str) -> str:
+    if plan.browser_extension_id is None:
+        raise BonsaiWorkspaceError(EXTENSION_SETUP_ERROR)
+    payload = {
+        "schema": EXTENSION_SCHEMA,
+        "requestId": str(uuid.uuid4()),
+        "source": "bonsai",
+        "createdAt": datetime.now(UTC).replace(microsecond=0).isoformat().replace("+00:00", "Z"),
+        "url": plan.url,
+        "label": _normalize_tab_label(label),
+        "workspace": plan.workspace_name,
+        "branch": plan.branch,
+        "worktreePath": str(plan.worktree_path),
+        "service": plan.service_name,
+        "port": plan.port,
+    }
+    encoded = (
+        base64.urlsafe_b64encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
+        .decode("ascii")
+        .rstrip("=")
+    )
+    return f"chrome-extension://{plan.browser_extension_id}/entry.html#{encoded}"
+
+
+def _open_labeled_url(plan: OpenUrlPlan, label: str) -> None:
+    if plan.browser_extension_id is None:
+        raise BonsaiWorkspaceError(EXTENSION_SETUP_ERROR)
+    target = resolve_open_target(plan)
+    entry_url = _extension_entry_url(target, label)
+    if not url_liveness_ok(target):
+        console.print(
+            f"The app isn't responding on localhost:{target.port} yet — "
+            f"run `bonsai up {target.branch}` then `bonsai open {target.branch}`."
+        )
+        raise typer.Exit(code=1)
+    if not webbrowser.open(entry_url):
+        raise BonsaiWorkspaceError(f"Failed to open extension entry URL: {entry_url}")
+    console.print(f"Opened labeled tab for {target.url}")
 
 
 def _open_primary_url(workspace_root: Path, name: str) -> None:
@@ -688,6 +751,13 @@ def open_command(
             "Use --no-interactive to print the resolved URL without probing.",
         ),
     ] = True,
+    label: Annotated[
+        str | None,
+        typer.Option(
+            "--label",
+            help="Open through the configured browser extension with a tab label.",
+        ),
+    ] = None,
 ) -> None:
     """Open a worktree's primary local URL."""
     try:
@@ -696,8 +766,12 @@ def open_command(
             plan = plan_open_url(root_path, Path.cwd(), service_name=service)
         else:
             plan = plan_open_url_for_worktree(root_path, name, service_name=service)
-        if interactive:
+        if interactive and label is not None:
+            _open_labeled_url(plan, label)
+        elif interactive:
             _open_url(plan)
+        elif label is not None:
+            typer.echo(_extension_entry_url(resolve_open_target(plan), label))
         else:
             _print_resolved_url(resolve_open_target(plan))
     except BonsaiError as exc:

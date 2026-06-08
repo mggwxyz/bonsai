@@ -58,12 +58,18 @@ class ServiceConfig:
 
 
 @dataclass(frozen=True)
+class BrowserExtensionConfig:
+    extension_id: str | None = None
+
+
+@dataclass(frozen=True)
 class BonsaiConfig:
     name: str
     base_branch: str | None
     workspace: WorkspaceConfig
     caddy: CaddyConfig
     commands: CommandsConfig
+    browser_extension: BrowserExtensionConfig = field(default_factory=BrowserExtensionConfig)
     shared_files: tuple[SharedFileConfig, ...] = field(default_factory=tuple)
     env: tuple[EnvConfig, ...] = field(default_factory=tuple)
     services: tuple[ServiceConfig, ...] = field(default_factory=tuple)
@@ -364,6 +370,8 @@ class OpenUrlPlan:
     url: str
     service_name: str
     port: int
+    workspace_name: str = ""
+    browser_extension_id: str | None = None
     via: Literal["caddy", "port"] = "caddy"
 
 

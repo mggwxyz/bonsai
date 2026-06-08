@@ -1899,6 +1899,8 @@ def _plan_service_open_url(
         url=url,
         service_name=service.name,
         port=service.base_port + worktree.slot,
+        workspace_name=config.name,
+        browser_extension_id=config.browser_extension.extension_id,
     )
 
 
@@ -1909,6 +1911,8 @@ def _port_open_plan(plan: OpenUrlPlan) -> OpenUrlPlan:
         url=f"http://localhost:{plan.port}",
         service_name=plan.service_name,
         port=plan.port,
+        workspace_name=plan.workspace_name,
+        browser_extension_id=plan.browser_extension_id,
         via="port",
     )
 
