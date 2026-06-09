@@ -337,10 +337,10 @@ trust guidance. Filter by worktree, by `--service <name>`, or
 use `--diagnose <url>` when a specific URL is not working. Use
 `bonsai urls --format json` for automation.
 
-`bonsai list` prints the default worktree and every managed worktree with
-branch, path, slot, kind, generated `.env.local` status, service ports, and
-service URLs. The default text output is a rich table. Use
-`bonsai list --format json` for a machine-readable workspace overview.
+`bonsai list` prints the default worktree and every managed worktree as a
+simple list of branch, path, and kind. Use `bonsai list --format json` for a
+machine-readable workspace overview with full detail (slot, generated
+`.env.local` status, service ports, and service URLs).
 
 `bonsai ports` prints every configured service port with listener ownership
 metadata from `lsof` when available. Each port is classified as `free`, `owned`

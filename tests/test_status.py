@@ -1,7 +1,6 @@
 import json
 from pathlib import Path
 
-from rich.table import Table
 from rich.text import Text
 
 from bonsai.models import (
@@ -98,20 +97,15 @@ def make_workspace_urls_plan() -> WorkspaceUrlsPlan:
     )
 
 
-def test_render_workspace_list_text_returns_rich_table() -> None:
+def test_render_workspace_list_text_returns_simple_list() -> None:
     rendered = render_workspace_list(make_workspace_summary(), "text")
 
-    assert isinstance(rendered, Table)
-    assert rendered.title == "Worktrees for authentic"
-    assert [column.header for column in rendered.columns] == [
-        "Branch",
-        "Path",
-        "Slot",
-        "Kind",
-        "Env",
-        "Ports",
-        "URLs",
-    ]
+    assert isinstance(rendered, str)
+    lines = rendered.splitlines()
+    assert lines[0] == "Worktrees for authentic"
+    assert lines[2] == "  feature  ./feature  managed"
+    assert "FRONTEND_PORT" not in rendered
+    assert "https://feature.authentic.localhost" not in rendered
 
 
 def test_render_workspace_list_json_payload() -> None:

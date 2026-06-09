@@ -163,14 +163,6 @@ def workspace_urls_payload(plan: WorkspaceUrlsPlan) -> dict[str, Any]:
     }
 
 
-def _format_ports(services: tuple[WorkspaceServiceSummary, ...]) -> str:
-    return "\n".join(f"{service.port_env}={service.port}" for service in services)
-
-
-def _format_urls(services: tuple[WorkspaceServiceSummary, ...]) -> str:
-    return "\n".join(service.url for service in services if service.url is not None)
-
-
 def _filtered_workspace_ports(
     ports,
     *,
@@ -215,33 +207,26 @@ def _workspace_ports_table(plan: WorkspacePortsPlan, *, only_busy: bool = False)
     return table
 
 
-def _workspace_list_table(summary: WorkspaceSummary) -> Table:
-    table = Table(title=f"Worktrees for {summary.workspace_name}")
-    table.add_column("Branch")
-    table.add_column("Path")
-    table.add_column("Slot", justify="right")
-    table.add_column("Kind")
-    table.add_column("Env")
-    table.add_column("Ports")
-    table.add_column("URLs")
+def _workspace_list_lines(summary: WorkspaceSummary) -> str:
+    lines = [f"Worktrees for {summary.workspace_name}", ""]
+    if not summary.worktrees:
+        lines.append("  (no worktrees)")
+        return "\n".join(lines) + "\n"
+    branch_width = max(len(worktree.branch) for worktree in summary.worktrees)
+    path_width = max(len(f"./{worktree.relative_path}") for worktree in summary.worktrees)
     for worktree in summary.worktrees:
-        table.add_row(
-            worktree.branch,
-            worktree.relative_path,
-            str(worktree.slot),
-            worktree.kind,
-            worktree.env_file_status,
-            _format_ports(worktree.services),
-            _format_urls(worktree.services),
+        path = f"./{worktree.relative_path}"
+        lines.append(
+            f"  {worktree.branch.ljust(branch_width)}  {path.ljust(path_width)}  {worktree.kind}"
         )
-    return table
+    return "\n".join(lines) + "\n"
 
 
-def render_workspace_list(summary: WorkspaceSummary, output_format: str) -> str | Table:
+def render_workspace_list(summary: WorkspaceSummary, output_format: str) -> str:
     output_format = validate_status_format(output_format)
     if output_format == "json":
         return json.dumps(workspace_list_payload(summary), indent=2, sort_keys=True) + "\n"
-    return _workspace_list_table(summary)
+    return _workspace_list_lines(summary)
 
 
 def render_workspace_ports(

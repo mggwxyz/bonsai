@@ -1780,14 +1780,11 @@ def test_list_command_shows_default_and_managed_worktrees(tmp_path: Path, monkey
     assert "Worktrees for authentic" in result.stdout
     assert "main" in result.stdout
     assert "MA-123-test" in result.stdout
-    assert "ma-123-test" in result.stdout
+    assert "./ma-123-test" in result.stdout
     assert "default" in result.stdout
     assert "managed" in result.stdout
-    assert "missing" in result.stdout
-    assert "FRONTEND_PORT=4200" in result.stdout
-    assert "FRONTEND_PORT=4201" in result.stdout
-    assert "https://main.authentic.localhost" in result.stdout
-    assert "https://ma-123-test.authentic.localhost" in result.stdout
+    assert "FRONTEND_PORT" not in result.stdout
+    assert "https://main.authentic.localhost" not in result.stdout
 
 
 def test_list_command_json_prints_workspace_summary(tmp_path: Path, monkeypatch) -> None:

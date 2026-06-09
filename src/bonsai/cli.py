@@ -889,10 +889,7 @@ def list_worktrees(
         root_path = find_workspace_root(Path.cwd())
         summary = plan_workspace_summary(root_path)
         rendered = render_workspace_list(summary, output_format)
-        if isinstance(rendered, str):
-            typer.echo(rendered, nl=False)
-        else:
-            console.print(rendered)
+        typer.echo(rendered, nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
