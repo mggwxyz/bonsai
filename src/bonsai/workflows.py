@@ -19,6 +19,7 @@ from bonsai.caddy import (
 from bonsai.compose import (
     StaleComposeContainer,
     detect_compose_project,
+    find_compose_published_ports,
     find_stale_compose_containers,
     remove_stopped_stale_compose_containers,
     teardown_compose_project,
@@ -1125,6 +1126,52 @@ def _annotate_owner_worktree(
     return owner
 
 
+def _compose_host_ports_by_branch(
+    runner: Runner,
+    targets: tuple[WorktreeTarget, ...],
+) -> dict[str, set[int]]:
+    project_by_branch: dict[str, str] = {}
+    for target in targets:
+        project = detect_compose_project(target.worktree_path)
+        if project is not None:
+            project_by_branch[target.branch] = project.project_name
+    if not project_by_branch:
+        return {}
+
+    try:
+        published_ports = find_compose_published_ports(
+            runner,
+            tuple(project_by_branch.values()),
+        )
+    except BonsaiWorkspaceError:
+        return {}
+
+    ports_by_project: dict[str, set[int]] = {}
+    for published in published_ports:
+        ports_by_project.setdefault(published.project_name, set()).add(published.host_port)
+    return {
+        branch: ports_by_project.get(project_name, set())
+        for branch, project_name in project_by_branch.items()
+    }
+
+
+def _annotate_compose_owner(
+    owner: PortOwner,
+    target: WorktreeTarget,
+    port: int,
+    compose_host_ports: dict[str, set[int]],
+) -> PortOwner:
+    if not owner.command.startswith("com.docker.backend"):
+        return owner
+    if port not in compose_host_ports.get(target.branch, set()):
+        return owner
+    return replace(
+        owner,
+        worktree_branch=target.branch,
+        worktree_path=target.worktree_path,
+    )
+
+
 def _workspace_port_status(
     target: WorktreeTarget,
     owners: tuple[PortOwner, ...],
@@ -1141,12 +1188,18 @@ def plan_workspace_ports(runner: Runner, workspace_root: Path) -> WorkspacePorts
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
     targets = _configured_worktree_targets(state, workspace_root)
+    compose_host_ports = _compose_host_ports_by_branch(runner, targets)
     ports: list[WorkspacePort] = []
     for target in targets:
         for service in config.services:
             port = service.base_port + target.worktree.slot
             owners = tuple(
-                _annotate_owner_worktree(owner, targets)
+                _annotate_compose_owner(
+                    _annotate_owner_worktree(owner, targets),
+                    target,
+                    port,
+                    compose_host_ports,
+                )
                 for owner in inspect_port_owners(runner, port)
             )
             ports.append(

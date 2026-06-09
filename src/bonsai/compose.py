@@ -35,6 +35,12 @@ class StaleComposeContainer:
     running: bool
 
 
+@dataclass(frozen=True)
+class ComposePublishedPort:
+    project_name: str
+    host_port: int
+
+
 def detect_compose_project(worktree_path: Path) -> ComposeProject | None:
     compose_file = next(
         (
@@ -149,6 +155,63 @@ def _compose_project_name(container: dict[str, Any]) -> str:
     if not isinstance(labels, dict):
         return ""
     return str(labels.get("com.docker.compose.project") or "")
+
+
+def _published_host_ports(container: dict[str, Any]) -> tuple[int, ...]:
+    network_settings = container.get("NetworkSettings")
+    if not isinstance(network_settings, dict):
+        return ()
+    ports = network_settings.get("Ports")
+    if not isinstance(ports, dict):
+        return ()
+
+    host_ports: set[int] = set()
+    for bindings in ports.values():
+        if not isinstance(bindings, list):
+            continue
+        for binding in bindings:
+            if not isinstance(binding, dict):
+                continue
+            host_port = str(binding.get("HostPort") or "").strip()
+            if host_port.isdigit():
+                host_ports.add(int(host_port))
+    return tuple(sorted(host_ports))
+
+
+def find_compose_published_ports(
+    runner: Runner,
+    project_names: tuple[str, ...],
+) -> tuple[ComposePublishedPort, ...]:
+    project_names = tuple(sorted({name for name in project_names if name}))
+    if not project_names:
+        return ()
+
+    container_ids: list[str] = []
+    seen_container_ids: set[str] = set()
+    for project_name in project_names:
+        for container_id in _project_container_ids(runner, project_name):
+            if container_id in seen_container_ids:
+                continue
+            seen_container_ids.add(container_id)
+            container_ids.append(container_id)
+    if not container_ids:
+        return ()
+
+    inspect_result = _run_docker(
+        runner,
+        ["docker", "inspect", *container_ids],
+        "Failed to inspect Docker Compose containers",
+    )
+    published: list[ComposePublishedPort] = []
+    for container in _parse_inspect_containers(inspect_result.stdout):
+        project_name = _compose_project_name(container)
+        if not project_name:
+            continue
+        published.extend(
+            ComposePublishedPort(project_name=project_name, host_port=host_port)
+            for host_port in _published_host_ports(container)
+        )
+    return tuple(published)
 
 
 def _container_state(container: dict[str, Any]) -> tuple[str, bool]:

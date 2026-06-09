@@ -2044,6 +2044,76 @@ def test_plan_workspace_ports_classifies_same_worktree_listener_as_owned(
     )
 
 
+def test_plan_workspace_ports_classifies_compose_published_port_as_owned(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    docker_cwd = tmp_path / "docker-data"
+
+    class LsofDockerRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env: dict[str, str] | None = None,
+        ) -> CommandResult:
+            if argv[0] == "lsof" and "-iTCP:5556" in argv:
+                return CommandResult(returncode=0, stdout="p123\nccom.docker.backend\numichael\n")
+            if argv == ["lsof", "-a", "-p", "123", "-d", "cwd", "-Fn"]:
+                return CommandResult(returncode=0, stdout=f"p123\nn{docker_cwd}\n")
+            if argv[:2] == ["docker", "ps"]:
+                return CommandResult(returncode=0, stdout="container-1\n")
+            if argv == ["docker", "inspect", "container-1"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        '[{"Config":{"Labels":{"com.docker.compose.project":"feature-a"}},'
+                        '"NetworkSettings":{"Ports":{"5432/tcp":[{"HostPort":"5556"}]}}}]'
+                    ),
+                )
+            return CommandResult(returncode=1)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature-a"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    (feature_worktree / "compose.yaml").write_text("services: {}\n", encoding="utf-8")
+    write_config(default_worktree, VALID_CONFIG)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "feature-a": ManagedWorktree(path="feature-a", slug="feature-a", slot=1),
+            },
+        ),
+    )
+    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+
+    ports = plan_workspace_ports(LsofDockerRunner(), workspace_root).ports
+    database = next(port for port in ports if port.branch == "feature-a" and port.port == 5556)
+    repair = workflows.plan_port_repairs(workspace_root, runner=LsofDockerRunner())
+
+    assert database.status == "owned"
+    assert database.owners == (
+        PortOwner(
+            pid=123,
+            command="com.docker.backend",
+            user="michael",
+            cwd=docker_cwd,
+            worktree_branch="feature-a",
+            worktree_path=feature_worktree,
+        ),
+    )
+    assert repair.items == ()
+
+
 def test_doctor_accepts_same_worktree_listener_and_fails_external_listener(
     tmp_path: Path,
     monkeypatch,
