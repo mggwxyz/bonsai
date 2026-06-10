@@ -901,32 +901,16 @@ def ports_command(
         str,
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
+    busy: Annotated[
+        bool,
+        typer.Option("--busy", help="Only show ports that currently have listeners."),
+    ] = False,
 ) -> None:
     """List configured service ports and listener ownership."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = plan_workspace_ports(SubprocessRunner(), root_path)
-        rendered = render_workspace_ports(plan, output_format)
-        if isinstance(rendered, str):
-            typer.echo(rendered, nl=False)
-        else:
-            console.print(rendered)
-    except BonsaiError as exc:
-        _fail(exc)
-
-
-@app.command("ps")
-def ps_command(
-    output_format: Annotated[
-        str,
-        typer.Option("--format", help="Output format: text or json."),
-    ] = "text",
-) -> None:
-    """List configured service ports that currently have listeners."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        plan = plan_workspace_ports(SubprocessRunner(), root_path)
-        rendered = render_workspace_ports(plan, output_format, only_busy=True)
+        rendered = render_workspace_ports(plan, output_format, only_busy=busy)
         if isinstance(rendered, str):
             typer.echo(rendered, nl=False)
         else:

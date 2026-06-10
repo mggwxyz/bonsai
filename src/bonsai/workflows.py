@@ -2181,7 +2181,7 @@ def _workspace_url_app_check(port: WorkspacePort, branch: str) -> UrlCheck:
             "app listener",
             "fail",
             f"localhost:{port.port} is busy but the owner could not be identified",
-            "Run: bonsai ps",
+            "Run: bonsai ports --busy",
         )
     return UrlCheck(
         "app listener",

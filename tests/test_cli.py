@@ -85,7 +85,6 @@ def test_help_lists_core_commands() -> None:
     assert "repair-ports" in result.stdout
     assert "ports" in result.stdout
     assert "urls" in result.stdout
-    assert "ps" in result.stdout
     assert "stop" in result.stdout
     assert "restart" in result.stdout
     assert "up" in result.stdout
@@ -2490,7 +2489,7 @@ def test_ports_command_prints_json_owner_report(monkeypatch, tmp_path: Path) -> 
     assert payload["ports"][0]["owners"][0]["worktree_branch"] == "feature-a"
 
 
-def test_ps_command_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
+def test_ports_busy_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
 
     def fake_plan_workspace_ports(_runner, root: Path):
@@ -2528,7 +2527,7 @@ def test_ps_command_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(cli, "plan_workspace_ports", fake_plan_workspace_ports, raising=False)
 
-    result = runner.invoke(cli.app, ["ps"])
+    result = runner.invoke(cli.app, ["ports", "--busy"])
 
     assert result.exit_code == 0
     assert "feature-a" in result.stdout
