@@ -62,7 +62,7 @@ def test_version_flag_prints_version() -> None:
     result = runner.invoke(cli.app, ["--version"])
 
     assert result.exit_code == 0
-    assert "bonsai 0.5.4" in result.stdout
+    assert "bonsai 0.6.0" in result.stdout
 
 
 def test_help_lists_core_commands() -> None:
