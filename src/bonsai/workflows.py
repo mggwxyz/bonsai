@@ -188,11 +188,6 @@ def _app_snippet_dirs(snippets_root: Path) -> list[Path]:
     )
 
 
-def _legacy_root_content(snippets_dir: Path) -> str:
-    """The exact content the old per-workspace root Caddyfile used to carry."""
-    return "\n".join(["{", "\tlocal_certs", "}", "", f"import {snippets_dir}/*.caddy", ""])
-
-
 def _check_port_listening(port: int) -> bool:
     import socket
 
@@ -1366,29 +1361,6 @@ def _stale_generated_snippet_actions(
     return tuple(actions)
 
 
-def _legacy_caddy_cleanup_actions(
-    config: BonsaiConfig,
-    workspace_root: Path,
-) -> tuple[SyncFileAction, ...]:
-    """Remove the dead per-workspace Caddyfile and snippets left by the old model."""
-    actions: list[SyncFileAction] = []
-    legacy_dir = workspace_root / _safe_path_segment(
-        config.caddy.snippets_dir, "caddy snippets_dir"
-    )
-    legacy_root = workspace_root / _safe_path_segment(
-        config.caddy.root_caddyfile, "caddy root_caddyfile"
-    )
-    if legacy_root.is_file() and legacy_root.read_text(encoding="utf-8") == _legacy_root_content(
-        legacy_dir
-    ):
-        actions.append(SyncFileAction(kind="remove", path=legacy_root))
-    if legacy_dir.is_dir():
-        for path in sorted(legacy_dir.glob("*.caddy")):
-            if path.is_file() and _is_bonsai_generated_file(path):
-                actions.append(SyncFileAction(kind="remove", path=path))
-    return tuple(actions)
-
-
 def _is_bonsai_generated_file(path: Path) -> bool:
     try:
         content = path.read_text(encoding="utf-8")
@@ -1418,7 +1390,6 @@ def plan_sync(workspace_root: Path) -> SyncPlan:
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             actions.append(SyncFileAction(kind="write", path=path, content=content))
     actions.extend(_stale_generated_snippet_actions(config, set(desired)))
-    actions.extend(_legacy_caddy_cleanup_actions(config, workspace_root))
     return SyncPlan(
         actions=tuple(actions),
         reload_caddy=bool(config.public_services())

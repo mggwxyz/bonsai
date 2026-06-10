@@ -7,7 +7,6 @@ from bonsai.models import (
     EnvConfig,
     ManagedWorktree,
     ServiceConfig,
-    WorkspaceConfig,
     WorktreeTarget,
 )
 from bonsai.workspace_facts import build_worktree_facts
@@ -19,7 +18,6 @@ def test_build_worktree_facts_projects_env_services_and_summary(tmp_path: Path) 
     config = BonsaiConfig(
         name="authentic",
         base_branch="main",
-        workspace=WorkspaceConfig(),
         caddy=CaddyConfig(),
         commands=CommandsConfig(),
         env=(
