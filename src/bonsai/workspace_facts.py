@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.models import (
-    AgentServiceContext,
     BonsaiConfig,
     WorkspaceServiceSummary,
     WorktreeSummary,
@@ -96,16 +95,3 @@ def build_worktree_facts(
     )
     return WorktreeFacts(summary=summary, generated_env=parse_env_content(desired_env))
 
-
-def agent_services_from_facts(facts: WorktreeFacts) -> tuple[AgentServiceContext, ...]:
-    return tuple(
-        AgentServiceContext(
-            name=service.name,
-            port_env=service.port_env,
-            port=service.port,
-            public=service.public,
-            primary=service.primary,
-            url=service.url,
-        )
-        for service in facts.summary.services
-    )

@@ -50,7 +50,6 @@ from bonsai.git import (
 from bonsai.logs import LogKind, command_log_dir, latest_command_log, next_command_log_path
 from bonsai.models import (
     AddFilesPlan,
-    AgentContext,
     AppDownPlan,
     AppUpPlan,
     BonsaiConfig,
@@ -105,7 +104,7 @@ from bonsai.rendering import (
 from bonsai.slug import branch_slug
 from bonsai.state import load_state, remove_worktree, save_state, update_worktree
 from bonsai.templates import render_template
-from bonsai.workspace_facts import agent_services_from_facts, build_worktree_facts
+from bonsai.workspace_facts import build_worktree_facts
 
 ConfigInitializer = Callable[[Path, str, str, Path], None]
 
@@ -2327,50 +2326,18 @@ def plan_current_worktree_status(
     )
     kind = "default" if branch == state.default_branch else "managed"
     target = WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
+    facts = build_worktree_facts(config, target, kind)
     return WorkspaceStatus(
         workspace_name=state.name,
         workspace_root=workspace_root,
         default_branch=state.default_branch,
         default_worktree=state.default_worktree,
         config_path=config_path,
-        current=build_worktree_facts(config, target, kind).summary,
+        current=facts.summary,
         location_kind="worktree",
         location_path=worktree_path,
         commands=_workspace_summary_commands(),
-    )
-
-
-def plan_agent_context(workspace_root: Path, current_path: Path) -> AgentContext:
-    state = load_state(workspace_root / ".bonsai" / "state.json")
-    config = load_workspace_config(workspace_root, state)
-    branch, worktree, worktree_path = _resolve_current_worktree(state, workspace_root, current_path)
-    kind = "default" if branch == state.default_branch else "managed"
-    target = WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
-    facts = build_worktree_facts(config, target, kind)
-    current = facts.summary
-
-    return AgentContext(
-        workspace_name=state.name,
-        workspace_root=workspace_root,
-        default_branch=state.default_branch,
-        default_worktree=state.default_worktree,
-        config_path=config.path
-        or resolve_workspace_config_path(workspace_root, state.default_worktree),
-        branch=current.branch,
-        worktree_path=current.worktree_path,
-        slug=current.slug,
-        slot=current.slot,
-        env_file_path=current.env_file_path,
-        env_file_status=current.env_file_status,
         generated_env=facts.generated_env,
-        services=agent_services_from_facts(facts),
-        commands={
-            "context": "bonsai context --format json",
-            "start": "bonsai start",
-            "open": "bonsai open",
-            "sync": "bonsai sync --apply",
-            "doctor": "bonsai doctor",
-        },
     )
 
 

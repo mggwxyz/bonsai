@@ -17,7 +17,6 @@ from rich.console import Console
 from rich.markup import escape
 
 from bonsai import __version__
-from bonsai.agent import render_agent_context
 from bonsai.command_results import (
     CommandRenderable,
     render_cleanup_result,
@@ -59,7 +58,6 @@ from bonsai.workflows import (
     execute_stop_processes,
     execute_sync,
     execute_up,
-    plan_agent_context,
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
@@ -842,13 +840,8 @@ def context_command(
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
 ) -> None:
-    """Print Bonsai facts for the current worktree."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        context = plan_agent_context(root_path, Path.cwd())
-        typer.echo(render_agent_context(context, output_format), nl=False)
-    except BonsaiError as exc:
-        _fail(exc)
+    """Print Bonsai facts for the current worktree (alias of status)."""
+    status_command(output_format)
 
 
 @app.command("shell-init")

@@ -98,6 +98,7 @@ def workspace_status_payload(status: WorkspaceStatus) -> dict[str, Any]:
             "path": str(location_path),
         },
         "current": _worktree_payload(status.current) if status.current is not None else None,
+        "generated_env": dict(status.generated_env),
         "commands": dict(status.commands),
     }
 

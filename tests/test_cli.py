@@ -1510,14 +1510,16 @@ url = "https://${slug}.authentic.localhost"
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["schema"] == "bonsai.context.v1"
+    assert payload["schema"] == "bonsai.status.v1"
     assert payload["workspace"]["name"] == "authentic"
     assert payload["current"]["branch"] == "MA-123-test"
     assert payload["current"]["slot"] == 1
-    assert payload["env_file"]["status"] == "current"
+    assert payload["current"]["env_file"]["status"] == "current"
+    assert payload["generated_env"]["FRONTEND_PORT"] == "4201"
+    assert payload["generated_env"]["COMPOSE_PROJECT_NAME"] == "authentic-ma-123-test"
     assert payload["commands"]["start"] == "bonsai start"
     assert payload["commands"]["open"] == "bonsai open"
-    assert payload["services"] == [
+    assert payload["current"]["services"] == [
         {
             "name": "frontend",
             "port_env": "FRONTEND_PORT",
@@ -1553,7 +1555,7 @@ url = "https://${slug}.authentic.localhost"
     result = runner.invoke(cli.app, ["context"])
 
     assert result.exit_code == 0
-    assert "Bonsai context" in result.stdout
+    assert "Bonsai status" in result.stdout
     assert "Workspace: authentic" in result.stdout
     assert "Branch: MA-123-test" in result.stdout
     assert "Env file:" in result.stdout

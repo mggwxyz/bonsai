@@ -59,7 +59,6 @@ from bonsai.workflows import (
     execute_up,
     global_caddy_paths,
     plan_add_files,
-    plan_agent_context,
     plan_clone_workspace,
     plan_command_log,
     plan_current_worktree_status,
@@ -858,7 +857,7 @@ def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> 
     assert plan.reload_caddy is True
 
 
-def test_plan_agent_context_reports_current_worktree_services_and_env_status(
+def test_plan_status_reports_current_worktree_services_and_env_status(
     tmp_path: Path,
 ) -> None:
     workspace_root = tmp_path / "authentic"
@@ -889,26 +888,28 @@ def test_plan_agent_context_reports_current_worktree_services_and_env_status(
         ),
     )
 
-    context = plan_agent_context(workspace_root, feature_worktree)
+    status = plan_current_worktree_status(workspace_root, feature_worktree)
 
-    assert context.workspace_name == "authentic"
-    assert context.workspace_root == workspace_root
-    assert context.config_path == default_worktree / ".bonsai.toml"
-    assert context.branch == "feature"
-    assert context.worktree_path == feature_worktree
-    assert context.slot == 1
-    assert context.env_file_path == feature_worktree / ".env.local"
-    assert context.env_file_status == "current"
-    assert context.generated_env["FRONTEND_PORT"] == "4201"
-    assert context.generated_env["COMPOSE_PROJECT_NAME"] == "authentic-feature"
-    assert context.commands["start"] == "bonsai start"
-    assert context.services[0].name == "frontend"
-    assert context.services[0].port_env == "FRONTEND_PORT"
-    assert context.services[0].port == 4201
-    assert context.services[0].url == "https://feature.authentic.localhost"
-    assert context.services[2].name == "db"
-    assert context.services[2].public is False
-    assert context.services[2].url is None
+    assert status.workspace_name == "authentic"
+    assert status.workspace_root == workspace_root
+    assert status.config_path == default_worktree / ".bonsai.toml"
+    current = status.current
+    assert current is not None
+    assert current.branch == "feature"
+    assert current.worktree_path == feature_worktree
+    assert current.slot == 1
+    assert current.env_file_path == feature_worktree / ".env.local"
+    assert current.env_file_status == "current"
+    assert status.generated_env["FRONTEND_PORT"] == "4201"
+    assert status.generated_env["COMPOSE_PROJECT_NAME"] == "authentic-feature"
+    assert status.commands["start"] == "bonsai start"
+    assert current.services[0].name == "frontend"
+    assert current.services[0].port_env == "FRONTEND_PORT"
+    assert current.services[0].port == 4201
+    assert current.services[0].url == "https://feature.authentic.localhost"
+    assert current.services[2].name == "db"
+    assert current.services[2].public is False
+    assert current.services[2].url is None
 
 
 def test_parse_env_content_ignores_comments_and_blank_lines() -> None:
@@ -929,7 +930,7 @@ VALUE_WITH_EQUALS=a=b
     }
 
 
-def test_plan_agent_context_marks_missing_generated_env(tmp_path: Path) -> None:
+def test_plan_status_marks_missing_generated_env(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
     default_worktree.mkdir(parents=True)
@@ -946,15 +947,16 @@ def test_plan_agent_context_marks_missing_generated_env(tmp_path: Path) -> None:
         ),
     )
 
-    context = plan_agent_context(workspace_root, default_worktree)
+    status = plan_current_worktree_status(workspace_root, default_worktree)
 
-    assert context.branch == "main"
-    assert context.slot == 0
-    assert context.env_file_status == "missing"
-    assert context.generated_env["FRONTEND_PORT"] == "4200"
+    assert status.current is not None
+    assert status.current.branch == "main"
+    assert status.current.slot == 0
+    assert status.current.env_file_status == "missing"
+    assert status.generated_env["FRONTEND_PORT"] == "4200"
 
 
-def test_plan_agent_context_marks_stale_generated_env(tmp_path: Path) -> None:
+def test_plan_status_marks_stale_generated_env(tmp_path: Path) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
     default_worktree.mkdir(parents=True)
@@ -972,10 +974,11 @@ def test_plan_agent_context_marks_stale_generated_env(tmp_path: Path) -> None:
         ),
     )
 
-    context = plan_agent_context(workspace_root, default_worktree)
+    status = plan_current_worktree_status(workspace_root, default_worktree)
 
-    assert context.env_file_status == "stale"
-    assert context.generated_env["FRONTEND_PORT"] == "4200"
+    assert status.current is not None
+    assert status.current.env_file_status == "stale"
+    assert status.generated_env["FRONTEND_PORT"] == "4200"
 
 
 def test_plan_workspace_summary_includes_default_managed_ports_urls_and_env_status(
