@@ -27,6 +27,13 @@ Bonsai is currently macOS-first and expects:
 - Caddy, installed by the Homebrew formula
 - GitHub CLI (`gh`) for PR-aware cleanup
 
+Check prerequisites at any time — this reports anything missing along with
+the fix:
+
+```bash
+bonsai doctor --preflight
+```
+
 ## From Source
 
 For local development:

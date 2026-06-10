@@ -30,7 +30,17 @@ bonsai start
 bonsai logs --command start
 bonsai status
 bonsai open
-bonsai open ma-123-implement-auth
 ```
 
-`bonsai checkout` needs shell integration to change the parent shell's working directory. Without the integration, it prints the resolved path and setup instructions instead.
+`bonsai checkout` needs [shell integration](shell-integration.md) to change the parent shell's working directory. Without the integration, it prints the resolved path and setup instructions instead.
+
+## Find Your Way Around
+
+- [Install](install.md) and the [Quickstart](quickstart.md) — from zero to a running app.
+- [Configuration](configuration.md) — everything `.bonsai.toml` controls.
+- [Worktrees](worktrees.md) — add, checkout, remove, move, and PR-aware cleanup.
+- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, and logs.
+- [Ports & URLs](urls-and-ports.md) — port slots, machine-global Caddy routing, open, urls, and ports.
+- [Workspace Views](workspace-views.md) — list, status, and agent context output.
+- [Command Reference](commands.md) — every command and option, generated from the CLI.
+- [Troubleshooting](troubleshooting.md) — doctor, repair, and common symptoms.

@@ -4,102 +4,113 @@ title: Quickstart
 
 # Quickstart
 
-Clone a repository into a Bonsai workspace:
+## The One Command
+
+Check prerequisites first — this reports anything missing along with the fix:
+
+```bash
+bonsai doctor --preflight
+```
+
+Then run:
+
+```bash
+bonsai start-here git@github.com:org/my-app.git my-app
+```
+
+`<name>` becomes the workspace folder. `start-here` runs preflight checks,
+clones the repo, guides you through config, offers shell integration,
+creates your first worktree, starts Caddy (or falls back to a direct port),
+and opens the app.
+
+### What You'll Be Asked
+
+**Guided config review** — Bonsai auto-detects your stack
+(Node/Python/Go/Rails/Docker Compose, etc.) and opens a terminal review
+menu. Each section explains what the setting controls. Press Enter to save
+the detected values, or choose a section number to revise it and return to
+the review screen:
+
+- **Project identity** — workspace name and base branch
+- **Lifecycle commands** — install, setup, and start commands
+- **Shared files** — whether `.env` is symlinked into each worktree
+- **Primary service** — service name, port environment variable, base port,
+  and local URL template
+
+**Shell integration offer** — asked once per machine. Accepting appends
+`eval "$(bonsai shell-init zsh)"` to `~/.zshrc`. After that you need to
+open a new shell (or `source ~/.zshrc`) before `bonsai checkout <branch>`
+can cd into a worktree.
+
+### What Success Looks Like
+
+```
+✅ done — your app is at <url>
+```
+
+The URL is either a Caddy HTTPS URL (`https://<slug>.<app>.localhost`) or a
+direct port URL (`http://localhost:<port>`) when Caddy isn't installed —
+both are expected and work fine.
+
+### If Something's Missing
+
+- **git not found** — `brew install git`, then re-run `bonsai start-here`
+- **Shell integration skipped** — `bonsai install-shell zsh`, open a new
+  shell, then `bonsai checkout <branch>` to cd in
+- **App not up yet** — `bonsai up <branch>` to start it in the background,
+  then `bonsai open <branch>` to open the URL
+
+## The Manual Flow
+
+Prefer separate steps? Clone a repository into a Bonsai workspace:
 
 ```bash
 bonsai clone git@github.com:org/my-app.git my-app
 ```
 
-If Bonsai cannot find a `.bonsai.toml`, it starts a guided review menu,
-explains each setup section, lets you edit any section, and writes a local
-workspace config.
+`clone` discovers the repository default branch and uses that branch name
+for the initial checkout directory. If Bonsai cannot find a `.bonsai.toml`,
+it starts the same guided review menu and writes a local workspace config.
+Pass `--no-interactive` to fail instead of prompting.
 
-Initialize an existing checkout that already has `.bonsai.toml`:
+Or initialize an existing checkout that already has `.bonsai.toml`:
 
 ```bash
 cd my-app/main
 bonsai init
 ```
 
-This adopts the checkout as the default worktree, imports existing sibling git worktrees, writes Bonsai workspace state beside it, and renders generated files.
-The checkout directory must match the current branch, matching Bonsai's `my-app/main` workspace layout.
-If state already exists but is missing sibling worktrees, rerunning `bonsai init` reconciles state from the existing config.
+This adopts the checkout as the default worktree, imports existing sibling
+git worktrees, writes Bonsai workspace state beside it, and renders
+generated files. The checkout directory must match the current branch,
+matching Bonsai's `my-app/main` workspace layout. If state already exists
+but is missing sibling worktrees, rerunning `bonsai init` reconciles state
+from the existing config.
 
-Create or prepare a branch worktree:
+Create a branch worktree and switch into it:
 
 ```bash
-cd my-app/main
 bonsai add ma-123-implement-auth
+bonsai checkout ma-123-implement-auth
 ```
 
-To create a new branch worktree from a different base branch for one command:
-
-```bash
-bonsai add ma-123-implement-auth --base-branch develop
-```
-
-When you want Bonsai to open the new working context immediately:
-
-```bash
-bonsai add ma-123-implement-auth --editor --open --start
-```
-
-Install shell integration once:
+`checkout` needs [shell integration](shell-integration.md) installed once
+per machine:
 
 ```bash
 bonsai install-shell zsh
 ```
 
-Open a new shell, then switch into the worktree:
-
-```bash
-bonsai checkout ma-123-implement-auth
-```
-
-Start the configured dev command:
+Start the configured dev command and open the app:
 
 ```bash
 bonsai start
-```
-
-You can also start a named branch, worktree directory, or worktree slug:
-
-```bash
-bonsai start ma-123-implement-auth
-```
-
-Open the worktree's primary local URL:
-
-```bash
 bonsai open
-bonsai open ma-123-implement-auth
 ```
 
-Inspect the current workspace and worktree context:
+## Where to Go Next
 
-```bash
-bonsai list
-bonsai list --format json
-bonsai status
-bonsai status --format json
-bonsai context
-bonsai context --format json
-```
-
-Read managed lifecycle logs for install, setup, and start commands:
-
-```bash
-bonsai logs
-bonsai logs ma-123-implement-auth --command start
-```
-
-Preview and apply repair or cleanup work:
-
-```bash
-bonsai sync
-bonsai repair
-bonsai cleanup
-bonsai repair --apply
-bonsai sync --apply
-bonsai cleanup --apply
-```
+- [Worktrees](worktrees.md) — add, checkout, remove, move, and PR-aware cleanup
+- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, logs
+- [Ports & URLs](urls-and-ports.md) — port slots, Caddy routing, open, urls, ports
+- [Workspace Views](workspace-views.md) — list, status, and agent context

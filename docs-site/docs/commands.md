@@ -22,6 +22,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `clone`: Clone a repository into a new Bonsai...
+* `start-here`: Guide a newcomer from clone to a running...
 * `init`: Create a starter .bonsai.toml for the...
 * `add`: Prepare a managed worktree for a branch.
 * `remove`: Remove a managed worktree.
@@ -66,6 +67,28 @@ $ bonsai clone [OPTIONS] GIT_URL NAME
 **Options**:
 
 * `--interactive / --no-interactive`: Create .bonsai.toml interactively when missing.  [default: interactive]
+* `--help`: Show this message and exit.
+
+## `bonsai start-here`
+
+Guide a newcomer from clone to a running app in one sequenced flow.
+
+**Usage**:
+
+```console
+$ bonsai start-here [OPTIONS] GIT_URL NAME
+```
+
+**Arguments**:
+
+* `GIT_URL`: [required]
+* `NAME`: [required]
+
+**Options**:
+
+* `--branch TEXT`: Branch to prepare as the first worktree.
+* `--shell TEXT`: Shell to offer integration for.  [default: zsh]
+* `--interactive / --no-interactive`: Run guided prompts and gate the final URL on a liveness probe. Use --no-interactive for a scripted run that prints the resolved URL.  [default: interactive]
 * `--help`: Show this message and exit.
 
 ## `bonsai init`
@@ -186,6 +209,8 @@ $ bonsai open [OPTIONS] [NAME]
 **Options**:
 
 * `--service TEXT`: Open a specific public service URL.
+* `--interactive / --no-interactive`: Launch a browser after confirming the URL responds. Use --no-interactive to print the resolved URL without probing.  [default: interactive]
+* `--label TEXT`: Open through the configured browser extension with a tab label.
 * `--help`: Show this message and exit.
 
 ## `bonsai urls`
@@ -507,4 +532,5 @@ $ bonsai doctor [OPTIONS]
 
 * `--format TEXT`: Output format: text or json.  [default: text]
 * `--apply`: Apply safe workspace repairs.
+* `--preflight`: Check first-run prerequisites without a workspace.
 * `--help`: Show this message and exit.

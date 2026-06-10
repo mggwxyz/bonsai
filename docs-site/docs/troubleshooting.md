@@ -21,13 +21,15 @@ Failed repairable checks point to:
 bonsai doctor --apply
 ```
 
-`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, stopped stale Docker Compose container removal, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
+`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, stopped stale Docker Compose container removal, migration of any old per-workspace Caddy files to the global layout, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
 
 If state points at missing or mis-slotted managed worktrees, preview structural repair first:
 
 ```bash
 bonsai repair
 ```
+
+`repair` removes missing managed worktree entries from `.bonsai/state.json` and repacks surviving managed slots. Paths that still exist but are not git worktrees are reported as warnings and left in state.
 
 Apply the state repair, then refresh generated files:
 

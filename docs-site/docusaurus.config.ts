@@ -78,7 +78,7 @@ const config: Config = {
           items: [
             {
               label: 'Quickstart',
-              to: '/docs/intro',
+              to: '/docs/quickstart',
             },
             {
               label: 'Commands',
