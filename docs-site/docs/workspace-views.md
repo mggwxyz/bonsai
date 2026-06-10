@@ -31,16 +31,9 @@ bonsai status --format json
 `status` prints the current worktree's Bonsai facts: workspace root, config
 path, branch, slot, generated `.env.local` status, service ports, service
 URLs, and recommended Bonsai commands. The default text output is optimized
-for humans; use JSON when a script needs the current worktree summary.
+for humans; the JSON payload also carries the worktree's generated
+environment values, so an AI agent or script can read exact ports, URLs,
+and env without guessing.
 
-## Agent Context
-
-```bash
-bonsai context
-bonsai context --format json
-```
-
-`context` prints the same worktree-scoped facts in an agent-oriented form.
-Use `--format json` when an AI agent or script needs exact ports, URLs,
-generated environment values, and recommended commands for the current
-worktree without guessing.
+`bonsai context` is an alias of `status`, kept for agent-oriented
+instructions.

@@ -63,14 +63,15 @@ TLS, and local CA trust guidance. Filter by worktree or `--service`, or use
 ```bash
 bonsai ports
 bonsai ports --format json
-bonsai ps
+bonsai ports --busy
 ```
 
 `ports` prints every configured service port with listener ownership
 metadata from `lsof` when available. Each port is classified as `free`,
 `owned` by the matching worktree, `conflict` with another process or
 worktree, or `unknown` when the port is listening but the owner cannot be
-identified. `ps` shows the same data filtered to ports with listeners.
+identified. `ports --busy` shows the same data filtered to ports with
+listeners.
 
 When a branch worktree's ports conflict, `bonsai repair-ports` proposes a
 conflict-free slot — see [Troubleshooting](troubleshooting.md).

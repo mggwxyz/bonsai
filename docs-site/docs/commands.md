@@ -30,16 +30,14 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `checkout`: Resolve or prepare a worktree for shell...
 * `open`: Open a worktree&#x27;s primary local URL.
 * `urls`: Show configured local URLs and route...
-* `context`: Print Bonsai facts for the current worktree.
+* `context`: Print Bonsai facts for the current...
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
 * `list`: List managed worktrees in the current...
 * `ports`: List configured service ports and listener...
-* `ps`: List configured service ports that...
 * `status`
 * `start`: Run the configured start command in a...
 * `up`: Start the configured app command in the...
-* `down`: Stop a background app process started by...
 * `stop`: Stop listener processes for configured...
 * `restart`: Stop matching listeners, then run the...
 * `logs`
@@ -236,7 +234,7 @@ $ bonsai urls [OPTIONS] [NAME]
 
 ## `bonsai context`
 
-Print Bonsai facts for the current worktree.
+Print Bonsai facts for the current worktree (alias of status).
 
 **Usage**:
 
@@ -313,21 +311,7 @@ $ bonsai ports [OPTIONS]
 **Options**:
 
 * `--format TEXT`: Output format: text or json.  [default: text]
-* `--help`: Show this message and exit.
-
-## `bonsai ps`
-
-List configured service ports that currently have listeners.
-
-**Usage**:
-
-```console
-$ bonsai ps [OPTIONS]
-```
-
-**Options**:
-
-* `--format TEXT`: Output format: text or json.  [default: text]
+* `--busy`: Only show ports that currently have listeners.
 * `--help`: Show this message and exit.
 
 ## `bonsai status`
@@ -378,25 +362,6 @@ $ bonsai up [OPTIONS] [NAME]
 **Options**:
 
 * `--wait-timeout FLOAT`: Seconds to wait for the primary service port.  [default: 30.0]
-* `--help`: Show this message and exit.
-
-## `bonsai down`
-
-Stop a background app process started by `bonsai up`.
-
-**Usage**:
-
-```console
-$ bonsai down [OPTIONS] [NAME]
-```
-
-**Arguments**:
-
-* `[NAME]`
-
-**Options**:
-
-* `--timeout FLOAT`: Seconds to wait before force killing the tracked PID.  [default: 5.0]
 * `--help`: Show this message and exit.
 
 ## `bonsai stop`

@@ -21,7 +21,7 @@ Failed repairable checks point to:
 bonsai doctor --apply
 ```
 
-`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, stopped stale Docker Compose container removal, migration of any old per-workspace Caddy files to the global layout, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
+`doctor --apply` runs safe workspace repairs: structural state repair, generated-file sync, stopped stale Docker Compose container removal, and configured Caddy bootstrap when Homebrew/Caddy state allows it.
 
 If state points at missing or mis-slotted managed worktrees, preview structural repair first:
 
@@ -78,10 +78,10 @@ Run:
 ```bash
 bonsai ports
 bonsai ports --format json
-bonsai ps
+bonsai ports --busy
 ```
 
-`ports` lists every configured service port and uses `lsof` to identify listening processes when available. `ps` shows the same data filtered to ports with listeners. Port statuses are `free`, `owned`, `conflict`, or `unknown`.
+`ports` lists every configured service port and uses `lsof` to identify listening processes when available. `ports --busy` shows the same data filtered to ports with listeners. Port statuses are `free`, `owned`, `conflict`, or `unknown`.
 
 ## Stop Or Restart A Worktree App
 
@@ -93,7 +93,7 @@ bonsai stop ma-123-implement-auth
 bonsai restart ma-123-implement-auth
 ```
 
-`stop` terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching listeners for every worktree.
+`stop` first terminates the worktree's tracked background process from `bonsai up`, then terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching processes for every worktree.
 
 ## Checkout Does Not Change Directories
 

@@ -34,11 +34,10 @@ automatically restart the process — use `up` for a background process.
 `start` requires the target worktree's generated `.env.local`; run
 `bonsai sync --apply` if it is missing.
 
-## Run in the Background with Up and Down
+## Run in the Background with Up
 
 ```bash
 bonsai up ma-123-implement-auth
-bonsai down ma-123-implement-auth
 ```
 
 `up` starts the configured start command detached and tracks its PID in
@@ -46,13 +45,9 @@ bonsai down ma-123-implement-auth
 configured service ports to start listening (30 seconds by default; tune
 with `--wait-timeout`). If the app does not become ready in time, Bonsai
 stops the process and reports the log path. If the worktree is already
-running, `up` refuses and points you at `bonsai down`.
+running, `up` refuses and points you at `bonsai stop`.
 
-`down` terminates the tracked process, waiting `--timeout` seconds (5 by
-default) before force-killing it. It reports when nothing is running or
-when the tracked PID turned out to be stale.
-
-## Stop and Restart by Port Ownership
+## Stop and Restart
 
 ```bash
 bonsai stop
@@ -61,13 +56,14 @@ bonsai stop --all
 bonsai restart ma-123-implement-auth
 ```
 
-`stop` terminates listener processes on the selected worktree's configured
-service ports when ownership can be matched to that worktree by process
-working directory. External or unknown owners are skipped unless `--force`
-is passed. `--all` stops matching listeners for every worktree.
+`stop` first terminates the worktree's tracked background process from
+`bonsai up`, then terminates listener processes on the worktree's
+configured service ports when ownership can be matched to that worktree by
+process working directory. External or unknown owners are skipped unless
+`--force` is passed. `--all` stops matching processes for every worktree.
 
 `restart` runs the same safe stop flow, then starts the selected worktree
-in the foreground.
+in the foreground (or in the background with `--detach`).
 
 ## Read Lifecycle Logs
 

@@ -41,7 +41,7 @@ The URL is either a Caddy HTTPS URL (`https://<slug>.<app>.localhost`) or a dire
 - Stable per-worktree port slots, generated `.env.local` files, and optional Caddy HTTPS routing via a machine-global config.
 - Lifecycle commands for install, setup, and start, with optional pre/post hooks, live output, and timestamped logs.
 - Shell checkout, editor/browser post-add automation, and agent-friendly context output.
-- Workspace inspection through rich text and JSON `list`, `status`, and `context` views.
+- Workspace inspection through rich text and JSON `list` and `status` views.
 - Process-aware port ownership inspection for configured worktree services.
 - State repair, generated-file sync, workspace diagnostics, PR-aware cleanup, and Docker Compose teardown during removal.
 
@@ -62,9 +62,9 @@ bonsai cleanup --apply                # remove worktrees with merged PRs
 Where to read more:
 
 - [Worktrees](https://mggwxyz.github.io/bonsai/docs/worktrees) — `add`, `checkout`, `remove`, `move`, `cleanup`
-- [Running Apps](https://mggwxyz.github.io/bonsai/docs/running-apps) — `start`, `up`, `down`, `stop`, `restart`, `logs`
-- [Ports & URLs](https://mggwxyz.github.io/bonsai/docs/urls-and-ports) — port slots, Caddy routing, `open`, `urls`, `ports`, `ps`
-- [Workspace Views](https://mggwxyz.github.io/bonsai/docs/workspace-views) — `list`, `status`, `context` (text and JSON)
+- [Running Apps](https://mggwxyz.github.io/bonsai/docs/running-apps) — `start`, `up`, `stop`, `restart`, `logs`
+- [Ports & URLs](https://mggwxyz.github.io/bonsai/docs/urls-and-ports) — port slots, Caddy routing, `open`, `urls`, `ports`
+- [Workspace Views](https://mggwxyz.github.io/bonsai/docs/workspace-views) — `list` and `status` (text and JSON)
 - [Shell Integration](https://mggwxyz.github.io/bonsai/docs/shell-integration) — checkout and completion setup
 - [Command Reference](https://mggwxyz.github.io/bonsai/docs/commands) — every command and option
 - [Troubleshooting](https://mggwxyz.github.io/bonsai/docs/troubleshooting) — `doctor`, `repair`, `repair-ports`, `sync`, common symptoms

@@ -25,9 +25,6 @@ the detected defaults when they look right. Pass `--no-interactive` to
 name = "my-app"
 base_branch = "main"
 
-[workspace]
-default_parent = "~/Projects"
-
 [commands]
 install = "npm install"
 setup = "npm run db:migrate"
@@ -56,12 +53,6 @@ url = "https://${slug}.my-app.localhost"
 - `name` (required) — workspace name. Used in hostnames and the global Caddy
   snippet directory, so it must be unique per machine.
 - `base_branch` — branch new worktrees are created from.
-
-### `[workspace]`
-
-- `default_parent` (default `~/Projects`) — written by the guided setup and
-  reserved for future use; `bonsai clone` currently creates the workspace
-  under the directory you run it from.
 
 ### `[commands]`
 
@@ -108,11 +99,10 @@ branch-specific project.
   Homebrew when missing.
 - `auto_start` (default `true`) — let Bonsai start and reload Caddy when
   routing changes.
-- `root_caddyfile`, `snippets_dir` — **deprecated**. Routing is now
-  machine-global under `~/.bonsai`. These keys are still parsed so old
-  configs load without error, but they are ignored for routing and no longer
-  written by `bonsai init`. `bonsai sync --apply` migrates any old
-  per-workspace `Caddyfile` and `caddy.d/` to the global layout.
+
+Retired keys from earlier versions (`[workspace] default_parent`, `[caddy]
+root_caddyfile`, `[caddy] snippets_dir`) are ignored, so old configs load
+without error.
 
 ### `[browser_extension]`
 
