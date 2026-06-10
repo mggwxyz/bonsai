@@ -48,7 +48,6 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
-    execute_down,
     execute_init,
     execute_move,
     execute_port_repairs,
@@ -201,12 +200,6 @@ def _render_up_result(plan) -> str:
     if plan.ready_ports:
         lines.append("ready ports: " + ", ".join(str(port) for port in plan.ready_ports))
     return "\n".join(lines) + "\n"
-
-
-def _render_down_result(plan) -> str:
-    if plan.pid is None:
-        return f"{plan.action} {plan.branch}\n"
-    return f"{plan.action} {plan.branch} pid={plan.pid}\n"
 
 
 def _complete_worktree_names(incomplete: str) -> list[str]:
@@ -979,31 +972,6 @@ def up_command(
         _fail(exc)
 
 
-@app.command("down")
-def down_command(
-    name: Annotated[
-        str | None,
-        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
-    ] = None,
-    timeout: Annotated[
-        float,
-        typer.Option("--timeout", help="Seconds to wait before force killing the tracked PID."),
-    ] = 5.0,
-) -> None:
-    """Stop a background app process started by `bonsai up`."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        plan = execute_down(
-            root_path,
-            name,
-            Path.cwd(),
-            terminate_timeout=timeout,
-        )
-        typer.echo(_render_down_result(plan), nl=False)
-    except BonsaiError as exc:
-        _fail(exc)
-
-
 @app.command("stop")
 def stop_command(
     name: Annotated[
@@ -1060,10 +1028,6 @@ def restart_command(
         label = name or "current worktree"
         console.print(f"Restarting {label}")
         runner = SubprocessRunner()
-        if detach:
-            down_plan = execute_down(root_path, name, Path.cwd(), terminate_timeout=5.0)
-            if down_plan.action != "not-running":
-                typer.echo(_render_down_result(down_plan), nl=False)
         stop_plan = execute_stop_processes(
             runner,
             root_path,

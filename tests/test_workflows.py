@@ -46,7 +46,6 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
-    execute_down,
     execute_init,
     execute_move,
     execute_port_repairs,
@@ -5938,13 +5937,14 @@ def test_execute_up_removes_record_and_stops_process_when_readiness_fails(
     assert not (workspace_root / ".bonsai" / "pids" / "main.json").exists()
 
 
-def test_execute_down_terminates_tracked_process_and_removes_record(
+def test_stop_terminates_tracked_process_and_removes_record(
     tmp_path: Path,
     monkeypatch,
 ) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
     default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
@@ -5977,24 +5977,25 @@ def test_execute_down_terminates_tracked_process_and_removes_record(
         lambda pid, sig: killed.append((pid, sig)),
     )
 
-    plan = execute_down(
+    plan = execute_stop_processes(
+        RecordingRunner(),
         workspace_root,
-        None,
-        default_worktree,
+        current_path=default_worktree,
         terminate_timeout=0.0,
     )
 
-    assert plan.branch == "main"
-    assert plan.pid == 123
-    assert plan.action == "stopped"
+    assert plan.apps[0].branch == "main"
+    assert plan.apps[0].pid == 123
+    assert plan.apps[0].action == "stopped"
     assert killed == [(123, signal.SIGTERM)]
     assert not pid_path.exists()
 
 
-def test_execute_down_removes_stale_record(tmp_path: Path, monkeypatch) -> None:
+def test_stop_removes_stale_tracked_record(tmp_path: Path, monkeypatch) -> None:
     workspace_root = tmp_path / "authentic"
     default_worktree = workspace_root / "main"
     default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
     save_state(
         workspace_root / ".bonsai" / "state.json",
         BonsaiState(
@@ -6022,10 +6023,14 @@ def test_execute_down_removes_stale_record(tmp_path: Path, monkeypatch) -> None:
     )
     monkeypatch.setattr(workflows, "_process_is_alive", lambda _pid: False)
 
-    plan = execute_down(workspace_root, None, default_worktree)
+    plan = execute_stop_processes(
+        RecordingRunner(),
+        workspace_root,
+        current_path=default_worktree,
+    )
 
-    assert plan.action == "stale"
-    assert plan.pid == 123
+    assert plan.apps[0].action == "stale"
+    assert plan.apps[0].pid == 123
     assert not pid_path.exists()
 
 

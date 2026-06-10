@@ -17,6 +17,7 @@ from bonsai import cli
 from bonsai.config import load_config
 from bonsai.errors import BonsaiWorkspaceError
 from bonsai.models import (
+    AppDownPlan,
     BonsaiState,
     CaddySetupResult,
     DoctorCheck,
@@ -27,6 +28,8 @@ from bonsai.models import (
     PortRepairItem,
     PortRepairPlan,
     PortRepairServiceChange,
+    StopProcessItem,
+    StopProcessPlan,
 )
 from bonsai.state import save_state
 
@@ -88,7 +91,6 @@ def test_help_lists_core_commands() -> None:
     assert "stop" in result.stdout
     assert "restart" in result.stdout
     assert "up" in result.stdout
-    assert "down" in result.stdout
 
     repair_help = runner.invoke(cli.app, ["repair", "--help"])
     assert repair_help.exit_code == 0
@@ -2119,31 +2121,43 @@ def test_up_command_starts_detached_app(monkeypatch, tmp_path: Path) -> None:
     assert "ready ports: 4201" in result.stdout
 
 
-def test_down_command_stops_tracked_app(monkeypatch, tmp_path: Path) -> None:
+def test_stop_reports_tracked_app(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
 
-    def fake_execute_down(
+    def fake_execute_stop_processes(
+        _runner,
         root: Path,
-        name: str | None,
         current_path: Path,
-        terminate_timeout: float,
+        name: str | None = None,
+        all_worktrees: bool = False,
+        force: bool = False,
     ):
-        calls.append((root, name, current_path, terminate_timeout))
-        return SimpleNamespace(
-            branch="feature-a",
-            worktree_path=tmp_path / "feature-a",
-            pid=123,
-            action="stopped",
-            log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+        calls.append((root, current_path, name, all_worktrees, force))
+        return StopProcessPlan(
+            items=(),
+            apps=(
+                AppDownPlan(
+                    branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
+                    pid=123,
+                    action="stopped",
+                    log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+                ),
+            ),
         )
 
-    monkeypatch.setattr(cli, "execute_down", fake_execute_down, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "execute_stop_processes",
+        fake_execute_stop_processes,
+        raising=False,
+    )
 
-    result = runner.invoke(cli.app, ["down", "feature-a", "--timeout", "0"])
+    result = runner.invoke(cli.app, ["stop", "feature-a"])
 
     assert result.exit_code == 0
-    assert calls == [(tmp_path, "feature-a", Path.cwd(), 0.0)]
+    assert calls == [(tmp_path, Path.cwd(), "feature-a", False, False)]
     assert "stopped feature-a pid=123" in result.stdout
 
 
@@ -2550,18 +2564,19 @@ def test_stop_command_terminates_matching_processes(monkeypatch, tmp_path: Path)
         force: bool = False,
     ):
         calls.append((root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return StopProcessPlan(
+            items=(
+                StopProcessItem(
                     action="stopped",
                     branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
                     service_name="frontend",
                     port_env="FRONTEND_PORT",
                     port=4201,
                     owner=PortOwner(pid=123, command="node", user="michael"),
                     reason="terminated",
-                )
-            ]
+                ),
+            )
         )
 
     monkeypatch.setattr(
@@ -2591,7 +2606,7 @@ def test_stop_command_passes_all_and_force(monkeypatch, tmp_path: Path) -> None:
         force: bool = False,
     ):
         calls.append((root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(items=())
 
     monkeypatch.setattr(
         cli,
@@ -2604,7 +2619,7 @@ def test_stop_command_passes_all_and_force(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert calls == [(tmp_path, Path.cwd(), None, True, True)]
-    assert "No listener processes matched" in result.stdout
+    assert "No running processes matched" in result.stdout
 
 
 def test_restart_stops_then_starts_foreground_process(monkeypatch, tmp_path: Path) -> None:
@@ -2620,7 +2635,7 @@ def test_restart_stops_then_starts_foreground_process(monkeypatch, tmp_path: Pat
         force: bool = False,
     ):
         calls.append(("stop", root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(items=())
 
     def fake_execute_start(_runner, root: Path, name: str | None, current_path: Path) -> int:
         calls.append(("start", root, name, current_path))
@@ -2660,7 +2675,18 @@ def test_restart_detach_stops_then_starts_supervised_process(
         force: bool = False,
     ):
         calls.append(("stop", root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(
+            items=(),
+            apps=(
+                AppDownPlan(
+                    branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
+                    pid=123,
+                    action="stopped",
+                    log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+                ),
+            ),
+        )
 
     def fake_execute_up(
         _runner,
@@ -2679,28 +2705,12 @@ def test_restart_detach_stops_then_starts_supervised_process(
             stale_pid=None,
         )
 
-    def fake_execute_down(
-        root: Path,
-        name: str | None,
-        current_path: Path,
-        terminate_timeout: float,
-    ):
-        calls.append(("down", root, name, current_path, terminate_timeout))
-        return SimpleNamespace(
-            branch="feature-a",
-            worktree_path=tmp_path / "feature-a",
-            pid=123,
-            action="stopped",
-            log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
-        )
-
     monkeypatch.setattr(
         cli,
         "execute_stop_processes",
         fake_execute_stop_processes,
         raising=False,
     )
-    monkeypatch.setattr(cli, "execute_down", fake_execute_down, raising=False)
     monkeypatch.setattr(cli, "execute_up", fake_execute_up, raising=False)
 
     result = runner.invoke(
@@ -2710,7 +2720,6 @@ def test_restart_detach_stops_then_starts_supervised_process(
 
     assert result.exit_code == 0
     assert calls == [
-        ("down", tmp_path, "feature-a", Path.cwd(), 5.0),
         ("stop", tmp_path, Path.cwd(), "feature-a", False, True),
         ("up", tmp_path, "feature-a", Path.cwd(), 0.5),
     ]

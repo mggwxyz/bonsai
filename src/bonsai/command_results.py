@@ -87,9 +87,14 @@ def render_port_repair_result(plan: PortRepairPlan, apply: bool) -> str:
 
 def render_stop_result(plan: StopProcessPlan) -> str:
     lines = ["stop"]
-    if not plan.items:
-        lines.append("No listener processes matched")
+    if not plan.apps and not plan.items:
+        lines.append("No running processes matched")
         return _join_lines(lines)
+    for app in plan.apps:
+        if app.pid is None:
+            lines.append(f"{app.action} {app.branch}")
+        else:
+            lines.append(f"{app.action} {app.branch} pid={app.pid}")
     for item in plan.items:
         line = (
             f"{item.action} {item.branch} {item.service_name} "

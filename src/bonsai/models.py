@@ -214,6 +214,7 @@ class StopProcessItem:
 @dataclass(frozen=True)
 class StopProcessPlan:
     items: tuple[StopProcessItem, ...]
+    apps: tuple[AppDownPlan, ...] = ()
 
 
 @dataclass(frozen=True)

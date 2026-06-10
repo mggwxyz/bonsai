@@ -1294,7 +1294,19 @@ def execute_stop_processes(
     name: str | None = None,
     all_worktrees: bool = False,
     force: bool = False,
+    terminate_timeout: float = 5.0,
 ) -> StopProcessPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    apps: list[AppDownPlan] = []
+    stopped_pids: set[int] = set()
+    for target in _stop_targets(state, workspace_root, current_path, name, all_worktrees):
+        app = _stop_tracked_app(workspace_root, target, terminate_timeout)
+        if app.action == "not-running":
+            continue
+        apps.append(app)
+        if app.pid is not None:
+            stopped_pids.add(app.pid)
+
     plan = plan_stop_processes(
         runner,
         workspace_root,
@@ -1305,6 +1317,8 @@ def execute_stop_processes(
     )
     applied: list[StopProcessItem] = []
     for item in plan.items:
+        if item.owner.pid in stopped_pids:
+            continue
         if item.action != "stop":
             applied.append(item)
             continue
@@ -1314,7 +1328,7 @@ def execute_stop_processes(
         except ProcessLookupError:
             reason = "process already exited"
         applied.append(replace(item, action="stopped", reason=reason))
-    return StopProcessPlan(items=tuple(applied))
+    return StopProcessPlan(items=tuple(applied), apps=tuple(apps))
 
 
 def _desired_sync_files(
@@ -1763,7 +1777,7 @@ def execute_up(
         existing_pid = _record_pid(record)
         if existing_pid is not None and _process_is_alive(existing_pid):
             raise BonsaiWorkspaceError(
-                f"{target.branch} is already running with pid {existing_pid}. Run: bonsai down"
+                f"{target.branch} is already running with pid {existing_pid}. Run: bonsai stop"
             )
         stale_pid = existing_pid
         _remove_process_record(record_path)
@@ -1828,13 +1842,11 @@ def execute_up(
     )
 
 
-def execute_down(
+def _stop_tracked_app(
     workspace_root: Path,
-    name: str | None,
-    current_path: Path,
+    target: WorktreeTarget,
     terminate_timeout: float = 5.0,
 ) -> AppDownPlan:
-    target = resolve_start_target(workspace_root, name, current_path)
     record_path = _app_process_record_path(workspace_root, target.worktree.slug)
     record = _read_app_process_record(record_path)
     if record is None:
@@ -2698,12 +2710,6 @@ def execute_remove(
             f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
         )
 
-    execute_down(
-        workspace_root,
-        resolved.branch,
-        current_path=default_worktree,
-        terminate_timeout=5.0,
-    )
     execute_stop_processes(
         runner,
         workspace_root,
