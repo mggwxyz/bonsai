@@ -79,6 +79,9 @@ from bonsai.workflows import (
     worktree_name_completions,
     write_files,
 )
+from bonsai.workflows import probes as wf_probes
+from bonsai.workflows import processes as wf_processes
+from bonsai.workflows import worktrees as wf_worktrees
 
 
 def test_allocate_slot_uses_lowest_available_positive_integer() -> None:
@@ -630,7 +633,11 @@ def test_plan_move_worktree_allows_case_only_samefile_target(
         return original_exists(path)
 
     monkeypatch.setattr(Path, "exists", fake_exists)
-    monkeypatch.setattr(workflows, "_paths_refer_to_same_existing_path", lambda _left, _right: True)
+    monkeypatch.setattr(
+        wf_worktrees,
+        "_paths_refer_to_same_existing_path",
+        lambda _left, _right: True,
+    )
 
     plan = plan_move_worktree(state, workspace_root, "feature", "MB-123")
 
@@ -703,7 +710,7 @@ def test_plan_move_worktree_rejects_case_only_samefile_symlink_target(
 
         monkeypatch.setattr(Path, "is_symlink", fake_is_symlink)
         monkeypatch.setattr(
-            workflows,
+            wf_worktrees,
             "_paths_refer_to_same_existing_path",
             lambda _left, _right: True,
         )
@@ -1789,7 +1796,7 @@ def test_check_workspace_health_passes_for_complete_workspace(
         ),
     )
     execute_sync(RecordingRunner(), workspace_root, apply=True)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     report = check_workspace_health(HealthyRunner(), workspace_root)
 
@@ -1828,7 +1835,7 @@ def test_check_workspace_health_fails_for_missing_generated_env(
             worktrees={},
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     report = check_workspace_health(GitRunner(), workspace_root)
 
@@ -1871,7 +1878,7 @@ def test_check_workspace_health_reports_port_conflicts(
         ),
     )
     execute_sync(RecordingRunner(), workspace_root, apply=True)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda port: port == 4200)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda port: port == 4200)
 
     report = check_workspace_health(GitRunner(), workspace_root)
 
@@ -1947,7 +1954,7 @@ def test_check_workspace_health_reports_stale_compose_networks(
         ),
     )
     execute_sync(RecordingRunner(), workspace_root, apply=True)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     report = check_workspace_health(DockerRunner(), workspace_root)
 
@@ -1999,7 +2006,7 @@ def test_plan_workspace_ports_classifies_same_worktree_listener_as_owned(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     plan = plan_workspace_ports(LsofRunner(), workspace_root)
     frontend = next(port for port in plan.ports if port.branch == "feature-a" and port.port == 4201)
@@ -2067,7 +2074,7 @@ def test_plan_workspace_ports_classifies_compose_published_port_as_owned(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     ports = plan_workspace_ports(LsofDockerRunner(), workspace_root).ports
     database = next(port for port in ports if port.branch == "feature-a" and port.port == 5556)
@@ -2136,7 +2143,7 @@ def test_doctor_accepts_same_worktree_listener_and_fails_external_listener(
         ),
     )
     execute_sync(RecordingRunner(), workspace_root, apply=True)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     report = check_workspace_health(LsofRunner(), workspace_root)
 
@@ -2198,7 +2205,7 @@ def test_plan_port_repairs_ignores_same_worktree_listener_with_owner_metadata(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     plan = workflows.plan_port_repairs(workspace_root, runner=LsofRunner())
 
@@ -2262,7 +2269,7 @@ def test_plan_stop_processes_targets_only_selected_worktree_owners(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     plan = plan_stop_processes(
         LsofRunner(),
@@ -2315,10 +2322,10 @@ def test_execute_stop_processes_terminates_selected_worktree_owners(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
     killed: list[tuple[int, signal.Signals]] = []
     monkeypatch.setattr(
-        "bonsai.workflows.os.kill",
+        "bonsai.workflows.processes.os.kill",
         lambda pid, sig: killed.append((pid, sig)),
     )
 
@@ -2373,10 +2380,10 @@ def test_execute_stop_processes_force_terminates_external_owner(
             },
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
     killed: list[tuple[int, signal.Signals]] = []
     monkeypatch.setattr(
-        "bonsai.workflows.os.kill",
+        "bonsai.workflows.processes.os.kill",
         lambda pid, sig: killed.append((pid, sig)),
     )
 
@@ -2417,7 +2424,7 @@ def test_plan_port_repairs_proposes_stable_conflict_free_slots(
     )
     busy_ports = {4201, 3336, 4204}
     monkeypatch.setattr(
-        "bonsai.workflows._check_port_listening",
+        "bonsai.workflows.probes._check_port_listening",
         lambda port: port in busy_ports,
     )
 
@@ -2467,7 +2474,7 @@ def test_plan_port_repairs_ignores_default_slot_conflicts(
         ),
     )
     monkeypatch.setattr(
-        "bonsai.workflows._check_port_listening",
+        "bonsai.workflows.probes._check_port_listening",
         lambda port: port == 4200,
     )
 
@@ -2503,7 +2510,7 @@ def test_execute_port_repairs_apply_updates_state_and_syncs_files(
         ),
     )
     monkeypatch.setattr(
-        "bonsai.workflows._check_port_listening",
+        "bonsai.workflows.probes._check_port_listening",
         lambda port: port == 4201,
     )
 
@@ -2549,7 +2556,7 @@ def test_execute_port_repairs_preview_does_not_update_state_or_files(
         ),
     )
     monkeypatch.setattr(
-        "bonsai.workflows._check_port_listening",
+        "bonsai.workflows.probes._check_port_listening",
         lambda port: port == 4201,
     )
 
@@ -2813,9 +2820,9 @@ def _caddy_open_plan() -> OpenUrlPlan:
 
 
 def test_resolve_open_target_keeps_caddy_when_caddy_listener_up(monkeypatch) -> None:
-    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(wf_probes, "_check_caddy_listening", lambda: True)
     monkeypatch.setattr(
-        workflows,
+        wf_probes,
         "_check_port_listening",
         lambda _port: pytest.fail("port probe must not gate the Caddy route"),
     )
@@ -2827,8 +2834,8 @@ def test_resolve_open_target_keeps_caddy_when_caddy_listener_up(monkeypatch) -> 
 
 
 def test_resolve_open_target_demotes_to_port_when_caddy_down(monkeypatch) -> None:
-    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: False)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+    monkeypatch.setattr(wf_probes, "_check_caddy_listening", lambda: False)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda port: port == 4201)
 
     resolved = resolve_open_target(_caddy_open_plan())
 
@@ -2838,8 +2845,8 @@ def test_resolve_open_target_demotes_to_port_when_caddy_down(monkeypatch) -> Non
 
 
 def test_resolve_open_target_keeps_caddy_plan_when_nothing_responds(monkeypatch) -> None:
-    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: False)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(wf_probes, "_check_caddy_listening", lambda: False)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda _port: False)
 
     resolved = resolve_open_target(_caddy_open_plan())
 
@@ -2848,15 +2855,15 @@ def test_resolve_open_target_keeps_caddy_plan_when_nothing_responds(monkeypatch)
 
 
 def test_url_liveness_ok_caddy_requires_listener_and_app_port(monkeypatch) -> None:
-    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+    monkeypatch.setattr(wf_probes, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda port: port == 4201)
 
     assert url_liveness_ok(_caddy_open_plan()) is True
 
 
 def test_url_liveness_ok_caddy_is_false_when_app_port_dead(monkeypatch) -> None:
-    monkeypatch.setattr(workflows, "_check_caddy_listening", lambda: True)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(wf_probes, "_check_caddy_listening", lambda: True)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda _port: False)
 
     assert url_liveness_ok(_caddy_open_plan()) is False
 
@@ -2871,11 +2878,11 @@ def test_url_liveness_ok_port_uses_port_probe(monkeypatch) -> None:
         via="port",
     )
     monkeypatch.setattr(
-        workflows,
+        wf_probes,
         "_check_caddy_listening",
         lambda: pytest.fail("port liveness must not consult the Caddy probe"),
     )
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda port: port == 4201)
 
     assert url_liveness_ok(port_plan) is True
 
@@ -3856,7 +3863,7 @@ def test_execute_move_uses_temporary_path_for_case_only_rename(
         ),
     )
     monkeypatch.setattr(
-        "bonsai.workflows._paths_refer_to_same_existing_path",
+        "bonsai.workflows.worktrees._paths_refer_to_same_existing_path",
         lambda left, right: left == old_worktree and right == new_worktree,
     )
 
@@ -4080,7 +4087,7 @@ def test_execute_rename_default_uses_temporary_path_for_case_only_rename(
         ),
     )
     monkeypatch.setattr(
-        "bonsai.workflows._paths_refer_to_same_existing_path",
+        "bonsai.workflows.worktrees._paths_refer_to_same_existing_path",
         lambda left, right: left == default_worktree and right == new_default,
     )
     runner = RecordingRunner()
@@ -5547,9 +5554,9 @@ def test_plan_workspace_urls_reports_route_tls_and_app_diagnostics(
             worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
         ),
     )
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda _port: False)
     monkeypatch.setattr(
-        workflows,
+        wf_probes,
         "_check_caddy_listening",
         lambda: pytest.fail("`urls` must not probe Caddy or demote to the port URL"),
     )
@@ -5597,7 +5604,7 @@ def test_plan_workspace_urls_matches_diagnosed_url(
         ),
     )
     execute_sync(RecordingRunner(), workspace_root, apply=True)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda _port: False)
 
     plan = plan_workspace_urls(
         RecordingRunner(),
@@ -5819,8 +5826,8 @@ def test_execute_up_replaces_stale_record_and_tracks_detached_process(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(workflows, "_process_is_alive", lambda _pid: False)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda port: port == 4201)
+    monkeypatch.setattr(wf_processes, "_process_is_alive", lambda _pid: False)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda port: port == 4201)
 
     plan = execute_up(
         runner,
@@ -5887,7 +5894,7 @@ def test_execute_up_refuses_when_tracked_process_is_alive(
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 321)
+    monkeypatch.setattr(wf_processes, "_process_is_alive", lambda pid: pid == 321)
 
     with pytest.raises(BonsaiWorkspaceError, match=r"already running"):
         execute_up(runner, workspace_root, None, default_worktree)
@@ -5917,10 +5924,10 @@ def test_execute_up_removes_record_and_stops_process_when_readiness_fails(
         ),
     )
     killed: list[tuple[int, signal.Signals]] = []
-    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 1000)
-    monkeypatch.setattr(workflows, "_check_port_listening", lambda _port: False)
+    monkeypatch.setattr(wf_processes, "_process_is_alive", lambda pid: pid == 1000)
+    monkeypatch.setattr(wf_probes, "_check_port_listening", lambda _port: False)
     monkeypatch.setattr(
-        "bonsai.workflows.os.kill",
+        "bonsai.workflows.processes.os.kill",
         lambda pid, sig: killed.append((pid, sig)),
     )
 
@@ -5971,9 +5978,9 @@ def test_stop_terminates_tracked_process_and_removes_record(
         encoding="utf-8",
     )
     killed: list[tuple[int, signal.Signals]] = []
-    monkeypatch.setattr(workflows, "_process_is_alive", lambda pid: pid == 123)
+    monkeypatch.setattr(wf_processes, "_process_is_alive", lambda pid: pid == 123)
     monkeypatch.setattr(
-        "bonsai.workflows.os.kill",
+        "bonsai.workflows.processes.os.kill",
         lambda pid, sig: killed.append((pid, sig)),
     )
 
@@ -6021,7 +6028,7 @@ def test_stop_removes_stale_tracked_record(tmp_path: Path, monkeypatch) -> None:
         ),
         encoding="utf-8",
     )
-    monkeypatch.setattr(workflows, "_process_is_alive", lambda _pid: False)
+    monkeypatch.setattr(wf_processes, "_process_is_alive", lambda _pid: False)
 
     plan = execute_stop_processes(
         RecordingRunner(),

@@ -69,8 +69,8 @@ def test_execute_remove_stops_worktree_listener_before_compose_and_cleans_logs(
             worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
         ),
     )
-    monkeypatch.setattr("bonsai.workflows.os.kill", fake_kill)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.processes.os.kill", fake_kill)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     plan = execute_remove(runner, "feature", workspace_root)
 
@@ -177,10 +177,10 @@ def test_execute_remove_runs_tracked_down_before_listener_stop_and_compose(
             worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
         ),
     )
-    monkeypatch.setattr("bonsai.workflows._process_is_alive", lambda pid: pid == 321)
-    monkeypatch.setattr("bonsai.workflows._terminate_process_id", fake_terminate)
-    monkeypatch.setattr("bonsai.workflows.os.kill", fake_kill)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.processes._process_is_alive", lambda pid: pid == 321)
+    monkeypatch.setattr("bonsai.workflows.processes._terminate_process_id", fake_terminate)
+    monkeypatch.setattr("bonsai.workflows.processes.os.kill", fake_kill)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     execute_remove(runner, "feature", workspace_root)
 
@@ -262,8 +262,8 @@ def test_execute_cleanup_apply_stops_worktree_listener_and_cleans_logs(
             worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
         ),
     )
-    monkeypatch.setattr("bonsai.workflows.os.kill", fake_kill)
-    monkeypatch.setattr("bonsai.workflows._check_port_listening", lambda _port: False)
+    monkeypatch.setattr("bonsai.workflows.processes.os.kill", fake_kill)
+    monkeypatch.setattr("bonsai.workflows.probes._check_port_listening", lambda _port: False)
 
     plan = execute_cleanup(runner, workspace_root, apply=True)
 
