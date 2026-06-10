@@ -4,17 +4,10 @@ import json
 from dataclasses import asdict
 from typing import Any
 
-from bonsai.errors import BonsaiConfigError
+from bonsai.command_results import validate_output_format
 from bonsai.models import AgentContext
 
 AGENT_CONTEXT_SCHEMA = "bonsai.context.v1"
-
-
-def validate_agent_format(output_format: str) -> str:
-    normalized = output_format.lower()
-    if normalized not in {"text", "json"}:
-        raise BonsaiConfigError(f"Unsupported format: {output_format}")
-    return normalized
 
 
 def agent_context_payload(context: AgentContext) -> dict[str, Any]:
@@ -45,7 +38,7 @@ def agent_context_payload(context: AgentContext) -> dict[str, Any]:
 
 
 def render_agent_context(context: AgentContext, output_format: str) -> str:
-    output_format = validate_agent_format(output_format)
+    output_format = validate_output_format(output_format)
     payload = agent_context_payload(context)
     if output_format == "json":
         return json.dumps(payload, indent=2, sort_keys=True) + "\n"

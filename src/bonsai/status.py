@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import json
+from collections.abc import Iterable
 from typing import Any
 
 from rich.table import Table
 from rich.text import Text
 
-from bonsai.errors import BonsaiConfigError
+from bonsai.command_results import validate_output_format
 from bonsai.models import (
-    PortOwner,
+    UrlCheck,
     WorkspacePort,
     WorkspacePortsPlan,
     WorkspaceServiceSummary,
@@ -18,18 +19,12 @@ from bonsai.models import (
     WorkspaceUrlsPlan,
     WorktreeSummary,
 )
+from bonsai.ports import owner_label, port_owner_payload
 
 LIST_SCHEMA = "bonsai.list.v1"
 STATUS_SCHEMA = "bonsai.status.v1"
 PORTS_SCHEMA = "bonsai.ports.v1"
 URLS_SCHEMA = "bonsai.urls.v1"
-
-
-def validate_status_format(output_format: str) -> str:
-    normalized = output_format.lower()
-    if normalized not in {"text", "json"}:
-        raise BonsaiConfigError(f"Unsupported format: {output_format}")
-    return normalized
 
 
 def _workspace_payload(summary: WorkspaceSummary | WorkspaceStatus) -> dict[str, str]:
@@ -69,17 +64,6 @@ def _worktree_payload(worktree: WorktreeSummary) -> dict[str, Any]:
     }
 
 
-def _port_owner_payload(owner: PortOwner) -> dict[str, Any]:
-    return {
-        "pid": owner.pid,
-        "command": owner.command,
-        "user": owner.user,
-        "cwd": str(owner.cwd) if owner.cwd is not None else None,
-        "worktree_branch": owner.worktree_branch,
-        "worktree_path": str(owner.worktree_path) if owner.worktree_path is not None else None,
-    }
-
-
 def _workspace_port_payload(port: WorkspacePort) -> dict[str, Any]:
     return {
         "branch": port.branch,
@@ -88,7 +72,7 @@ def _workspace_port_payload(port: WorkspacePort) -> dict[str, Any]:
         "port_env": port.port_env,
         "port": port.port,
         "status": port.status,
-        "owners": [_port_owner_payload(owner) for owner in port.owners],
+        "owners": [port_owner_payload(owner) for owner in port.owners],
     }
 
 
@@ -131,7 +115,7 @@ def workspace_ports_payload(
     }
 
 
-def _url_check_payload(check) -> dict[str, Any]:
+def _url_check_payload(check: UrlCheck) -> dict[str, Any]:
     return {
         "name": check.name,
         "status": check.status,
@@ -164,7 +148,7 @@ def workspace_urls_payload(plan: WorkspaceUrlsPlan) -> dict[str, Any]:
 
 
 def _filtered_workspace_ports(
-    ports,
+    ports: Iterable[WorkspacePort],
     *,
     only_busy: bool,
 ) -> tuple[WorkspacePort, ...]:
@@ -174,19 +158,10 @@ def _filtered_workspace_ports(
     return tuple(port for port in ports if port.status != "free")
 
 
-def _owner_label(owner: PortOwner) -> str:
-    label = f"{owner.command or 'process'}[{owner.pid}]"
-    if owner.worktree_branch is not None:
-        return f"{label} in {owner.worktree_branch}"
-    if owner.cwd is not None:
-        return f"{label} at {owner.cwd}"
-    return label
-
-
 def _format_port_owners(port: WorkspacePort) -> str:
     if not port.owners:
         return ""
-    return "\n".join(_owner_label(owner) for owner in port.owners)
+    return "\n".join(owner_label(owner) for owner in port.owners)
 
 
 def _workspace_ports_table(plan: WorkspacePortsPlan, *, only_busy: bool = False) -> Table:
@@ -223,7 +198,7 @@ def _workspace_list_lines(summary: WorkspaceSummary) -> str:
 
 
 def render_workspace_list(summary: WorkspaceSummary, output_format: str) -> str:
-    output_format = validate_status_format(output_format)
+    output_format = validate_output_format(output_format)
     if output_format == "json":
         return json.dumps(workspace_list_payload(summary), indent=2, sort_keys=True) + "\n"
     return _workspace_list_lines(summary)
@@ -235,7 +210,7 @@ def render_workspace_ports(
     *,
     only_busy: bool = False,
 ) -> str | Table:
-    output_format = validate_status_format(output_format)
+    output_format = validate_output_format(output_format)
     if output_format == "json":
         return json.dumps(
             workspace_ports_payload(plan, only_busy=only_busy),
@@ -246,7 +221,7 @@ def render_workspace_ports(
 
 
 def render_workspace_urls(plan: WorkspaceUrlsPlan, output_format: str) -> str:
-    output_format = validate_status_format(output_format)
+    output_format = validate_output_format(output_format)
     if output_format == "json":
         return json.dumps(workspace_urls_payload(plan), indent=2, sort_keys=True) + "\n"
 
@@ -444,7 +419,7 @@ def render_workspace_status(
     *,
     color: bool = False,
 ) -> str | Text:
-    output_format = validate_status_format(output_format)
+    output_format = validate_output_format(output_format)
     if output_format == "json":
         return json.dumps(workspace_status_payload(status), indent=2, sort_keys=True) + "\n"
     if color:

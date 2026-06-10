@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from rich.table import Table
 
+from bonsai.errors import BonsaiConfigError
 from bonsai.models import (
     CleanupPlan,
     DoctorApplyPlan,
@@ -11,8 +12,16 @@ from bonsai.models import (
     StopProcessPlan,
     SyncPlan,
 )
+from bonsai.ports import owner_label
 
 CommandRenderable = str | Table
+
+
+def validate_output_format(output_format: str) -> str:
+    normalized = output_format.lower()
+    if normalized not in {"text", "json"}:
+        raise BonsaiConfigError(f"Unsupported format: {output_format}")
+    return normalized
 
 
 def _join_lines(lines: list[str]) -> str:
@@ -67,27 +76,13 @@ def render_port_repair_result(plan: PortRepairPlan, apply: bool) -> str:
         lines.append(f"{item.branch} slot {item.current_slot} -> {item.proposed_slot}")
         for service in item.services:
             lines.append(f"  {service.port_env} {service.old_port} -> {service.new_port}")
-            for owner in getattr(service, "owners", ()):
-                owner_label = f"{owner.command or 'process'}[{owner.pid}]"
-                if owner.worktree_branch is not None:
-                    owner_label = f"{owner_label} in {owner.worktree_branch}"
-                elif owner.cwd is not None:
-                    owner_label = f"{owner_label} at {owner.cwd}"
-                lines.append(f"    owner {owner_label}")
+            for owner in service.owners:
+                lines.append(f"    owner {owner_label(owner)}")
     if apply:
         lines.append("Updated state and regenerated files")
     else:
         lines.append("No files changed")
     return _join_lines(lines)
-
-
-def _owner_label(owner) -> str:
-    label = f"{owner.command or 'process'}[{owner.pid}]"
-    if owner.worktree_branch is not None:
-        return f"{label} in {owner.worktree_branch}"
-    if owner.cwd is not None:
-        return f"{label} at {owner.cwd}"
-    return label
 
 
 def render_stop_result(plan: StopProcessPlan) -> str:
@@ -98,7 +93,7 @@ def render_stop_result(plan: StopProcessPlan) -> str:
     for item in plan.items:
         line = (
             f"{item.action} {item.branch} {item.service_name} "
-            f"{item.port_env}={item.port} {_owner_label(item.owner)}"
+            f"{item.port_env}={item.port} {owner_label(item.owner)}"
         )
         if item.action == "skip":
             line = f"{line} - {item.reason}"

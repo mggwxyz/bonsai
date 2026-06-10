@@ -26,13 +26,14 @@ from bonsai.command_results import (
     render_repair_result,
     render_stop_result,
     render_sync_result,
+    validate_output_format,
 )
-from bonsai.doctor import preflight_report, render_doctor_json, validate_doctor_format
+from bonsai.doctor import preflight_report, render_doctor_json
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.models import OpenUrlPlan
 from bonsai.onboarding import write_guided_config as onboarding_write_guided_config
-from bonsai.port_repair import render_port_repair_json, validate_port_repair_format
+from bonsai.port_repair import render_port_repair_json
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
 from bonsai.status import (
@@ -683,7 +684,7 @@ def remove_command(
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
-        if getattr(plan, "compose_project_name", None) is not None:
+        if plan.compose_project_name is not None:
             console.print(f"compose down {plan.compose_project_name}")
         console.print(f"Removed worktree: {plan.worktree_path}")
     except BonsaiError as exc:
@@ -1171,7 +1172,7 @@ def repair_ports(
 ) -> None:
     """Plan or apply slot reassignments for worktrees with conflicting ports."""
     try:
-        output_format = validate_port_repair_format(output_format)
+        output_format = validate_output_format(output_format)
         root_path = find_workspace_root(Path.cwd())
         runner = SubprocessRunner()
         plan = (
@@ -1221,7 +1222,7 @@ def doctor(
 ) -> None:
     """Check workspace health and report repair hints."""
     try:
-        output_format = validate_doctor_format(output_format)
+        output_format = validate_output_format(output_format)
         if preflight:
             repo_path = Path.cwd()
             report = preflight_report(SubprocessRunner(), repo_path)

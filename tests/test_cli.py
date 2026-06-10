@@ -24,6 +24,9 @@ from bonsai.models import (
     ManagedWorktree,
     OpenUrlPlan,
     PortOwner,
+    PortRepairItem,
+    PortRepairPlan,
+    PortRepairServiceChange,
 )
 from bonsai.state import save_state
 
@@ -772,7 +775,11 @@ def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:
 
     def fake_execute_remove(runner, name: str, root: Path, force: bool = False):
         calls.append(("remove", runner, name, root, force))
-        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+        return SimpleNamespace(
+            worktree_path=root / "feature",
+            branch="feature",
+            compose_project_name=None,
+        )
 
     monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
     monkeypatch.setattr(cli, "find_workspace_root", fake_find_workspace_root)
@@ -815,7 +822,11 @@ def test_remove_force_passes_force(monkeypatch, tmp_path: Path) -> None:
 
     def fake_execute_remove(_runner, name: str, root: Path, force: bool = False):
         calls.append((name, root, force))
-        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+        return SimpleNamespace(
+            worktree_path=root / "feature",
+            branch="feature",
+            compose_project_name=None,
+        )
 
     monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
 
@@ -1223,10 +1234,7 @@ def test_open_label_rejects_invalid_label(
     assert message in result.stdout
 
 
-def test_open_label_no_interactive_prints_extension_url_without_probing(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
+def _setup_no_interactive_open_workspace(monkeypatch, tmp_path: Path) -> None:
     _write_labeled_open_workspace(tmp_path)
 
     def fail_browser(_url):
@@ -1238,6 +1246,13 @@ def test_open_label_no_interactive_prints_extension_url_without_probing(
     monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
     monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
     monkeypatch.chdir(tmp_path / "ma-123-test")
+
+
+def test_open_label_no_interactive_prints_extension_url_without_probing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
 
     result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
 
@@ -1252,7 +1267,7 @@ def test_open_label_no_interactive_prints_resolved_extension_url_without_probing
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _write_labeled_open_workspace(tmp_path)
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
 
     def fake_resolve(plan):
         return OpenUrlPlan(
@@ -1266,16 +1281,7 @@ def test_open_label_no_interactive_prints_resolved_extension_url_without_probing
             via="port",
         )
 
-    def fail_browser(_url):
-        raise AssertionError("--no-interactive must not open a browser")
-
-    def fail_liveness(_plan):
-        raise AssertionError("--no-interactive must not gate on a liveness probe")
-
-    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
     monkeypatch.setattr(cli, "resolve_open_target", fake_resolve, raising=False)
-    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
-    monkeypatch.chdir(tmp_path / "ma-123-test")
 
     result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
 
@@ -1288,18 +1294,8 @@ def test_open_label_no_interactive_prints_long_extension_url_on_one_line(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _write_labeled_open_workspace(tmp_path)
-
-    def fail_browser(_url):
-        raise AssertionError("--no-interactive must not open a browser")
-
-    def fail_liveness(_plan):
-        raise AssertionError("--no-interactive must not gate on a liveness probe")
-
-    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
-    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
-    monkeypatch.chdir(tmp_path / "ma-123-test")
 
     result = runner.invoke(
         cli.app,
@@ -2319,29 +2315,29 @@ def test_repair_ports_previews_reassignment_plan(monkeypatch, tmp_path: Path) ->
     def fake_plan_port_repairs(root: Path, runner=None):
         assert root == tmp_path
         calls.append(runner)
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
                         ),
-                        SimpleNamespace(
+                        PortRepairServiceChange(
                             name="api",
                             port_env="API_PORT",
                             old_port=3334,
                             new_port=3338,
                         ),
-                    ],
-                )
-            ]
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)
@@ -2366,23 +2362,23 @@ def test_repair_ports_apply_updates_state_and_generated_files(
 
     def fake_execute_port_repairs(_runner, root: Path, apply: bool = False):
         calls.append((root, apply))
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
-                        )
-                    ],
-                )
-            ]
+                        ),
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "execute_port_repairs", fake_execute_port_repairs, raising=False)
@@ -2406,23 +2402,23 @@ def test_repair_ports_json_prints_machine_readable_plan(
 
     def fake_plan_port_repairs(root: Path, runner=None):
         assert root == tmp_path
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
-                        )
-                    ],
-                )
-            ]
+                        ),
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)

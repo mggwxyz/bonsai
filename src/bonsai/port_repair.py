@@ -4,41 +4,21 @@ import json
 from pathlib import Path
 from typing import Any
 
-from bonsai.errors import BonsaiConfigError
-from bonsai.models import PortRepairPlan
+from bonsai.models import PortRepairPlan, PortRepairServiceChange
+from bonsai.ports import port_owner_payload
 
 PORT_REPAIR_SCHEMA = "bonsai.port-repair.v1"
 
 
-def validate_port_repair_format(output_format: str) -> str:
-    normalized = output_format.lower()
-    if normalized not in {"text", "json"}:
-        raise BonsaiConfigError(f"Unsupported format: {output_format}")
-    return normalized
-
-
-def _service_payload(service) -> dict[str, Any]:
-    payload = {
+def _service_payload(service: PortRepairServiceChange) -> dict[str, Any]:
+    payload: dict[str, Any] = {
         "name": service.name,
         "port_env": service.port_env,
         "old_port": service.old_port,
         "new_port": service.new_port,
     }
-    owners = tuple(getattr(service, "owners", ()))
-    if owners:
-        payload["owners"] = [
-            {
-                "pid": owner.pid,
-                "command": owner.command,
-                "user": owner.user,
-                "cwd": str(owner.cwd) if owner.cwd is not None else None,
-                "worktree_branch": owner.worktree_branch,
-                "worktree_path": str(owner.worktree_path)
-                if owner.worktree_path is not None
-                else None,
-            }
-            for owner in owners
-        ]
+    if service.owners:
+        payload["owners"] = [port_owner_payload(owner) for owner in service.owners]
     return payload
 
 

@@ -2,9 +2,30 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 from bonsai.models import CommandResult, ManagedWorktree, PortOwner
 from bonsai.process import Runner
+
+
+def owner_label(owner: PortOwner) -> str:
+    label = f"{owner.command or 'process'}[{owner.pid}]"
+    if owner.worktree_branch is not None:
+        return f"{label} in {owner.worktree_branch}"
+    if owner.cwd is not None:
+        return f"{label} at {owner.cwd}"
+    return label
+
+
+def port_owner_payload(owner: PortOwner) -> dict[str, Any]:
+    return {
+        "pid": owner.pid,
+        "command": owner.command,
+        "user": owner.user,
+        "cwd": str(owner.cwd) if owner.cwd is not None else None,
+        "worktree_branch": owner.worktree_branch,
+        "worktree_path": str(owner.worktree_path) if owner.worktree_path is not None else None,
+    }
 
 
 def allocate_slot(worktrees: dict[str, ManagedWorktree]) -> int:

@@ -544,8 +544,10 @@ def test_plan_move_worktree_rejects_managed_path_collision_with_missing_director
         plan_move_worktree(state, workspace_root, "feature", "taken")
 
 
-def test_plan_move_worktree_rejects_other_branch_identifier_collision(
+@pytest.mark.parametrize("target_name", ["other-branch", "other-slug"])
+def test_plan_move_worktree_rejects_other_identifier_collision(
     tmp_path: Path,
+    target_name: str,
 ) -> None:
     workspace_root = tmp_path / "authentic"
     (workspace_root / "feature").mkdir(parents=True)
@@ -565,43 +567,13 @@ def test_plan_move_worktree_rejects_other_branch_identifier_collision(
         },
     )
 
-    target = workspace_root / "other-branch"
+    target = workspace_root / target_name
     assert not target.exists()
     with pytest.raises(
         BonsaiWorkspaceError,
         match=re.escape(f"Worktree target already exists: {target}"),
     ):
-        plan_move_worktree(state, workspace_root, "feature", "other-branch")
-
-
-def test_plan_move_worktree_rejects_other_slug_identifier_collision(
-    tmp_path: Path,
-) -> None:
-    workspace_root = tmp_path / "authentic"
-    (workspace_root / "feature").mkdir(parents=True)
-    state = BonsaiState(
-        version=1,
-        name="authentic",
-        default_branch="main",
-        default_worktree="main",
-        repo_url="git@github.com:org/authentic.git",
-        worktrees={
-            "feature": ManagedWorktree(path="feature", slug="feature", slot=1),
-            "other-branch": ManagedWorktree(
-                path="other-path",
-                slug="other-slug",
-                slot=2,
-            ),
-        },
-    )
-
-    target = workspace_root / "other-slug"
-    assert not target.exists()
-    with pytest.raises(
-        BonsaiWorkspaceError,
-        match=re.escape(f"Worktree target already exists: {target}"),
-    ):
-        plan_move_worktree(state, workspace_root, "feature", "other-slug")
+        plan_move_worktree(state, workspace_root, "feature", target_name)
 
 
 def test_plan_move_worktree_allows_own_branch_identifier_as_target(
@@ -2979,7 +2951,18 @@ def test_plan_add_files_rejects_unsafe_service_name(tmp_path: Path) -> None:
         )
 
 
-def test_plan_add_files_uses_safe_slug_for_absolute_branch_path(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("branch", "expected_slug"),
+    [
+        ("/tmp/outside", "tmp-outside"),
+        ("../outside", "outside"),
+    ],
+)
+def test_plan_add_files_uses_safe_slug_for_path_like_branch(
+    tmp_path: Path,
+    branch: str,
+    expected_slug: str,
+) -> None:
     config = load_config(write_config(tmp_path, VALID_CONFIG))
     state = BonsaiState(
         version=1,
@@ -2995,38 +2978,13 @@ def test_plan_add_files_uses_safe_slug_for_absolute_branch_path(tmp_path: Path) 
         config=config,
         state=state,
         workspace_root=workspace_root,
-        branch="/tmp/outside",
+        branch=branch,
     )
 
-    assert plan.branch == "/tmp/outside"
-    assert plan.worktree_path == workspace_root / "tmp-outside"
+    assert plan.branch == branch
+    assert plan.worktree_path == workspace_root / expected_slug
     assert plan.worktree_path.is_relative_to(workspace_root)
-    assert plan.updated_state.worktrees["/tmp/outside"].path == "tmp-outside"
-
-
-def test_plan_add_files_uses_safe_slug_for_parent_relative_branch_path(tmp_path: Path) -> None:
-    config = load_config(write_config(tmp_path, VALID_CONFIG))
-    state = BonsaiState(
-        version=1,
-        name="authentic",
-        default_branch="main",
-        default_worktree="main",
-        repo_url="git@github.com:org/authentic.git",
-        worktrees={},
-    )
-    workspace_root = tmp_path / "authentic"
-
-    plan = plan_add_files(
-        config=config,
-        state=state,
-        workspace_root=workspace_root,
-        branch="../outside",
-    )
-
-    assert plan.branch == "../outside"
-    assert plan.worktree_path == workspace_root / "outside"
-    assert plan.worktree_path.is_relative_to(workspace_root)
-    assert plan.updated_state.worktrees["../outside"].path == "outside"
+    assert plan.updated_state.worktrees[branch].path == expected_slug
 
 
 def test_plan_add_files_rejects_branch_with_empty_slug(tmp_path: Path) -> None:

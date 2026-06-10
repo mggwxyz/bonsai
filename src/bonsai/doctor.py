@@ -6,7 +6,6 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from bonsai.compose import detect_compose_project
-from bonsai.errors import BonsaiConfigError
 from bonsai.models import CommandResult, DoctorApplyPlan, DoctorCheck, DoctorReport
 
 DOCTOR_SCHEMA = "bonsai.doctor.v1"
@@ -114,13 +113,6 @@ def preflight_report(
     return DoctorReport(checks=tuple(checks))
 
 
-def validate_doctor_format(output_format: str) -> str:
-    normalized = output_format.lower()
-    if normalized not in {"text", "json"}:
-        raise BonsaiConfigError(f"Unsupported format: {output_format}")
-    return normalized
-
-
 def _fallback_check_id(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", name.lower()).strip("-")
     return normalized or "check"
@@ -137,12 +129,12 @@ def doctor_report_payload(
         "failed": report.failed,
         "checks": [
             {
-                "id": getattr(check, "id", None) or _fallback_check_id(check.name),
+                "id": check.id or _fallback_check_id(check.name),
                 "name": check.name,
                 "status": check.status,
                 "detail": check.detail,
                 "hint": check.hint,
-                "repair": getattr(check, "repair", None),
+                "repair": check.repair,
             }
             for check in report.checks
         ],
