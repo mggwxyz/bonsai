@@ -6,19 +6,9 @@ from typing import Literal
 
 
 @dataclass(frozen=True)
-class WorkspaceConfig:
-    default_parent: str = "~/Projects"
-
-
-@dataclass(frozen=True)
 class CaddyConfig:
     auto_install: bool = True
     auto_start: bool = True
-    # Deprecated: routing is now machine-global under ~/.bonsai. These are kept
-    # so old .bonsai.toml files still load and so sync can clean up the legacy
-    # per-workspace files. They no longer affect where Caddy config is written.
-    root_caddyfile: str = "Caddyfile"
-    snippets_dir: str = "caddy.d"
 
 
 @dataclass(frozen=True)
@@ -66,7 +56,6 @@ class BrowserExtensionConfig:
 class BonsaiConfig:
     name: str
     base_branch: str | None
-    workspace: WorkspaceConfig
     caddy: CaddyConfig
     commands: CommandsConfig
     browser_extension: BrowserExtensionConfig = field(default_factory=BrowserExtensionConfig)
@@ -107,15 +96,6 @@ class BonsaiState:
     default_worktree: str
     repo_url: str
     worktrees: dict[str, ManagedWorktree]
-
-
-@dataclass(frozen=True)
-class WorkspacePaths:
-    root: Path
-    default_worktree: Path
-    state_file: Path
-    caddyfile: Path
-    snippets_dir: Path
 
 
 @dataclass(frozen=True)
@@ -234,6 +214,7 @@ class StopProcessItem:
 @dataclass(frozen=True)
 class StopProcessPlan:
     items: tuple[StopProcessItem, ...]
+    apps: tuple[AppDownPlan, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -412,34 +393,6 @@ class CommandLogPlan:
 
 
 @dataclass(frozen=True)
-class AgentServiceContext:
-    name: str
-    port_env: str
-    port: int
-    public: bool
-    primary: bool
-    url: str | None
-
-
-@dataclass(frozen=True)
-class AgentContext:
-    workspace_name: str
-    workspace_root: Path
-    default_branch: str
-    default_worktree: str
-    config_path: Path
-    branch: str
-    worktree_path: Path
-    slug: str
-    slot: int
-    env_file_path: Path
-    env_file_status: str
-    generated_env: dict[str, str]
-    services: tuple[AgentServiceContext, ...]
-    commands: dict[str, str]
-
-
-@dataclass(frozen=True)
 class WorkspaceServiceSummary:
     name: str
     port_env: str
@@ -484,3 +437,4 @@ class WorkspaceStatus:
     commands: dict[str, str]
     location_kind: str = "worktree"
     location_path: Path | None = None
+    generated_env: dict[str, str] = field(default_factory=dict)

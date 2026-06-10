@@ -13,7 +13,6 @@ from bonsai.models import (
     EnvConfig,
     ServiceConfig,
     SharedFileConfig,
-    WorkspaceConfig,
 )
 
 
@@ -29,7 +28,6 @@ def load_config(path: Path) -> BonsaiConfig:
     config = BonsaiConfig(
         name=_require_str(raw, "name"),
         base_branch=_optional_str(raw, "base_branch"),
-        workspace=_workspace(_optional_table(raw, "workspace")),
         caddy=_caddy(_optional_table(raw, "caddy")),
         commands=_commands(_optional_table(raw, "commands")),
         browser_extension=_browser_extension(_optional_table(raw, "browser_extension")),
@@ -92,16 +90,10 @@ def _optional_bool(raw: dict[str, Any], key: str, default: bool) -> bool:
     return value
 
 
-def _workspace(raw: dict[str, Any]) -> WorkspaceConfig:
-    return WorkspaceConfig(default_parent=_optional_str(raw, "default_parent", "~/Projects"))
-
-
 def _caddy(raw: dict[str, Any]) -> CaddyConfig:
     return CaddyConfig(
         auto_install=_optional_bool(raw, "auto_install", True),
         auto_start=_optional_bool(raw, "auto_start", True),
-        root_caddyfile=_optional_str(raw, "root_caddyfile", "Caddyfile"),
-        snippets_dir=_optional_str(raw, "snippets_dir", "caddy.d"),
     )
 
 

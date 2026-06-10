@@ -9,14 +9,9 @@ VALID_CONFIG = """
 name = "authentic"
 base_branch = "main"
 
-[workspace]
-default_parent = "~/Projects"
-
 [caddy]
 auto_install = true
 auto_start = true
-root_caddyfile = "Caddyfile"
-snippets_dir = "caddy.d"
 
 [commands]
 install = "yarn install"
@@ -64,8 +59,7 @@ def test_load_config_parses_valid_file(tmp_path: Path) -> None:
 
     assert config.name == "authentic"
     assert config.base_branch == "main"
-    assert config.workspace.default_parent == "~/Projects"
-    assert config.caddy.snippets_dir == "caddy.d"
+    assert config.caddy.auto_install is True
     assert config.commands.install == "yarn install"
     assert config.commands.setup == "yarn setup"
     assert config.commands.start == "yarn dev"
@@ -183,14 +177,26 @@ def test_boolean_base_port_is_rejected(tmp_path: Path) -> None:
         load_config(write_config(tmp_path, text))
 
 
-def test_workspace_must_be_a_table(tmp_path: Path) -> None:
+def test_retired_config_keys_are_ignored(tmp_path: Path) -> None:
     text = VALID_CONFIG.replace(
-        '[workspace]\ndefault_parent = "~/Projects"',
-        'workspace = "bad"',
+        "[caddy]\nauto_install = true",
+        "\n".join(
+            [
+                "[workspace]",
+                'default_parent = "~/Projects"',
+                "",
+                "[caddy]",
+                'root_caddyfile = "Caddyfile"',
+                'snippets_dir = "caddy.d"',
+                "auto_install = true",
+            ]
+        ),
     )
 
-    with pytest.raises(BonsaiConfigError, match="Config key workspace must be a table"):
-        load_config(write_config(tmp_path, text))
+    config = load_config(write_config(tmp_path, text))
+
+    assert config.name == "authentic"
+    assert config.caddy.auto_install is True
 
 
 def test_shared_files_must_contain_tables(tmp_path: Path) -> None:
@@ -215,13 +221,6 @@ def test_caddy_boolean_values_must_be_booleans(tmp_path: Path) -> None:
     text = VALID_CONFIG.replace("auto_install = true", 'auto_install = "false"')
 
     with pytest.raises(BonsaiConfigError, match="Config key auto_install must be a boolean"):
-        load_config(write_config(tmp_path, text))
-
-
-def test_caddy_string_values_must_be_strings(tmp_path: Path) -> None:
-    text = VALID_CONFIG.replace('snippets_dir = "caddy.d"', "snippets_dir = 123")
-
-    with pytest.raises(BonsaiConfigError, match="Config key snippets_dir must be a string"):
         load_config(write_config(tmp_path, text))
 
 

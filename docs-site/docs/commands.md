@@ -22,6 +22,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 **Commands**:
 
 * `clone`: Clone a repository into a new Bonsai...
+* `start-here`: Guide a newcomer from clone to a running...
 * `init`: Create a starter .bonsai.toml for the...
 * `add`: Prepare a managed worktree for a branch.
 * `remove`: Remove a managed worktree.
@@ -29,16 +30,14 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `checkout`: Resolve or prepare a worktree for shell...
 * `open`: Open a worktree&#x27;s primary local URL.
 * `urls`: Show configured local URLs and route...
-* `context`: Print Bonsai facts for the current worktree.
+* `context`: Print Bonsai facts for the current...
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
 * `list`: List managed worktrees in the current...
 * `ports`: List configured service ports and listener...
-* `ps`: List configured service ports that...
 * `status`
 * `start`: Run the configured start command in a...
 * `up`: Start the configured app command in the...
-* `down`: Stop a background app process started by...
 * `stop`: Stop listener processes for configured...
 * `restart`: Stop matching listeners, then run the...
 * `logs`
@@ -66,6 +65,28 @@ $ bonsai clone [OPTIONS] GIT_URL NAME
 **Options**:
 
 * `--interactive / --no-interactive`: Create .bonsai.toml interactively when missing.  [default: interactive]
+* `--help`: Show this message and exit.
+
+## `bonsai start-here`
+
+Guide a newcomer from clone to a running app in one sequenced flow.
+
+**Usage**:
+
+```console
+$ bonsai start-here [OPTIONS] GIT_URL NAME
+```
+
+**Arguments**:
+
+* `GIT_URL`: [required]
+* `NAME`: [required]
+
+**Options**:
+
+* `--branch TEXT`: Branch to prepare as the first worktree.
+* `--shell TEXT`: Shell to offer integration for.  [default: zsh]
+* `--interactive / --no-interactive`: Run guided prompts and gate the final URL on a liveness probe. Use --no-interactive for a scripted run that prints the resolved URL.  [default: interactive]
 * `--help`: Show this message and exit.
 
 ## `bonsai init`
@@ -186,6 +207,8 @@ $ bonsai open [OPTIONS] [NAME]
 **Options**:
 
 * `--service TEXT`: Open a specific public service URL.
+* `--interactive / --no-interactive`: Launch a browser after confirming the URL responds. Use --no-interactive to print the resolved URL without probing.  [default: interactive]
+* `--label TEXT`: Open through the configured browser extension with a tab label.
 * `--help`: Show this message and exit.
 
 ## `bonsai urls`
@@ -211,7 +234,7 @@ $ bonsai urls [OPTIONS] [NAME]
 
 ## `bonsai context`
 
-Print Bonsai facts for the current worktree.
+Print Bonsai facts for the current worktree (alias of status).
 
 **Usage**:
 
@@ -288,21 +311,7 @@ $ bonsai ports [OPTIONS]
 **Options**:
 
 * `--format TEXT`: Output format: text or json.  [default: text]
-* `--help`: Show this message and exit.
-
-## `bonsai ps`
-
-List configured service ports that currently have listeners.
-
-**Usage**:
-
-```console
-$ bonsai ps [OPTIONS]
-```
-
-**Options**:
-
-* `--format TEXT`: Output format: text or json.  [default: text]
+* `--busy`: Only show ports that currently have listeners.
 * `--help`: Show this message and exit.
 
 ## `bonsai status`
@@ -353,25 +362,6 @@ $ bonsai up [OPTIONS] [NAME]
 **Options**:
 
 * `--wait-timeout FLOAT`: Seconds to wait for the primary service port.  [default: 30.0]
-* `--help`: Show this message and exit.
-
-## `bonsai down`
-
-Stop a background app process started by `bonsai up`.
-
-**Usage**:
-
-```console
-$ bonsai down [OPTIONS] [NAME]
-```
-
-**Arguments**:
-
-* `[NAME]`
-
-**Options**:
-
-* `--timeout FLOAT`: Seconds to wait before force killing the tracked PID.  [default: 5.0]
 * `--help`: Show this message and exit.
 
 ## `bonsai stop`
@@ -507,4 +497,5 @@ $ bonsai doctor [OPTIONS]
 
 * `--format TEXT`: Output format: text or json.  [default: text]
 * `--apply`: Apply safe workspace repairs.
+* `--preflight`: Check first-run prerequisites without a workspace.
 * `--help`: Show this message and exit.

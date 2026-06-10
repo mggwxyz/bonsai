@@ -17,6 +17,7 @@ from bonsai import cli
 from bonsai.config import load_config
 from bonsai.errors import BonsaiWorkspaceError
 from bonsai.models import (
+    AppDownPlan,
     BonsaiState,
     CaddySetupResult,
     DoctorCheck,
@@ -24,6 +25,11 @@ from bonsai.models import (
     ManagedWorktree,
     OpenUrlPlan,
     PortOwner,
+    PortRepairItem,
+    PortRepairPlan,
+    PortRepairServiceChange,
+    StopProcessItem,
+    StopProcessPlan,
 )
 from bonsai.state import save_state
 
@@ -82,11 +88,9 @@ def test_help_lists_core_commands() -> None:
     assert "repair-ports" in result.stdout
     assert "ports" in result.stdout
     assert "urls" in result.stdout
-    assert "ps" in result.stdout
     assert "stop" in result.stdout
     assert "restart" in result.stdout
     assert "up" in result.stdout
-    assert "down" in result.stdout
 
     repair_help = runner.invoke(cli.app, ["repair", "--help"])
     assert repair_help.exit_code == 0
@@ -772,7 +776,11 @@ def test_remove_executes_workflow(monkeypatch, tmp_path: Path) -> None:
 
     def fake_execute_remove(runner, name: str, root: Path, force: bool = False):
         calls.append(("remove", runner, name, root, force))
-        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+        return SimpleNamespace(
+            worktree_path=root / "feature",
+            branch="feature",
+            compose_project_name=None,
+        )
 
     monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
     monkeypatch.setattr(cli, "find_workspace_root", fake_find_workspace_root)
@@ -815,7 +823,11 @@ def test_remove_force_passes_force(monkeypatch, tmp_path: Path) -> None:
 
     def fake_execute_remove(_runner, name: str, root: Path, force: bool = False):
         calls.append((name, root, force))
-        return SimpleNamespace(worktree_path=root / "feature", branch="feature")
+        return SimpleNamespace(
+            worktree_path=root / "feature",
+            branch="feature",
+            compose_project_name=None,
+        )
 
     monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
 
@@ -1223,10 +1235,7 @@ def test_open_label_rejects_invalid_label(
     assert message in result.stdout
 
 
-def test_open_label_no_interactive_prints_extension_url_without_probing(
-    monkeypatch,
-    tmp_path: Path,
-) -> None:
+def _setup_no_interactive_open_workspace(monkeypatch, tmp_path: Path) -> None:
     _write_labeled_open_workspace(tmp_path)
 
     def fail_browser(_url):
@@ -1238,6 +1247,13 @@ def test_open_label_no_interactive_prints_extension_url_without_probing(
     monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
     monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
     monkeypatch.chdir(tmp_path / "ma-123-test")
+
+
+def test_open_label_no_interactive_prints_extension_url_without_probing(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
 
     result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
 
@@ -1252,7 +1268,7 @@ def test_open_label_no_interactive_prints_resolved_extension_url_without_probing
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _write_labeled_open_workspace(tmp_path)
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
 
     def fake_resolve(plan):
         return OpenUrlPlan(
@@ -1266,16 +1282,7 @@ def test_open_label_no_interactive_prints_resolved_extension_url_without_probing
             via="port",
         )
 
-    def fail_browser(_url):
-        raise AssertionError("--no-interactive must not open a browser")
-
-    def fail_liveness(_plan):
-        raise AssertionError("--no-interactive must not gate on a liveness probe")
-
-    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
     monkeypatch.setattr(cli, "resolve_open_target", fake_resolve, raising=False)
-    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
-    monkeypatch.chdir(tmp_path / "ma-123-test")
 
     result = runner.invoke(cli.app, ["open", "--label", "Feature tab", "--no-interactive"])
 
@@ -1288,18 +1295,8 @@ def test_open_label_no_interactive_prints_long_extension_url_on_one_line(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
-    _write_labeled_open_workspace(tmp_path)
-
-    def fail_browser(_url):
-        raise AssertionError("--no-interactive must not open a browser")
-
-    def fail_liveness(_plan):
-        raise AssertionError("--no-interactive must not gate on a liveness probe")
-
-    monkeypatch.setattr(cli.webbrowser, "open", fail_browser)
+    _setup_no_interactive_open_workspace(monkeypatch, tmp_path)
     monkeypatch.setattr(cli, "resolve_open_target", lambda plan: plan, raising=False)
-    monkeypatch.setattr(cli, "url_liveness_ok", fail_liveness, raising=False)
-    monkeypatch.chdir(tmp_path / "ma-123-test")
 
     result = runner.invoke(
         cli.app,
@@ -1515,14 +1512,16 @@ url = "https://${slug}.authentic.localhost"
 
     assert result.exit_code == 0
     payload = json.loads(result.stdout)
-    assert payload["schema"] == "bonsai.context.v1"
+    assert payload["schema"] == "bonsai.status.v1"
     assert payload["workspace"]["name"] == "authentic"
     assert payload["current"]["branch"] == "MA-123-test"
     assert payload["current"]["slot"] == 1
-    assert payload["env_file"]["status"] == "current"
+    assert payload["current"]["env_file"]["status"] == "current"
+    assert payload["generated_env"]["FRONTEND_PORT"] == "4201"
+    assert payload["generated_env"]["COMPOSE_PROJECT_NAME"] == "authentic-ma-123-test"
     assert payload["commands"]["start"] == "bonsai start"
     assert payload["commands"]["open"] == "bonsai open"
-    assert payload["services"] == [
+    assert payload["current"]["services"] == [
         {
             "name": "frontend",
             "port_env": "FRONTEND_PORT",
@@ -1558,7 +1557,7 @@ url = "https://${slug}.authentic.localhost"
     result = runner.invoke(cli.app, ["context"])
 
     assert result.exit_code == 0
-    assert "Bonsai context" in result.stdout
+    assert "Bonsai status" in result.stdout
     assert "Workspace: authentic" in result.stdout
     assert "Branch: MA-123-test" in result.stdout
     assert "Env file:" in result.stdout
@@ -2122,31 +2121,43 @@ def test_up_command_starts_detached_app(monkeypatch, tmp_path: Path) -> None:
     assert "ready ports: 4201" in result.stdout
 
 
-def test_down_command_stops_tracked_app(monkeypatch, tmp_path: Path) -> None:
+def test_stop_reports_tracked_app(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
 
-    def fake_execute_down(
+    def fake_execute_stop_processes(
+        _runner,
         root: Path,
-        name: str | None,
         current_path: Path,
-        terminate_timeout: float,
+        name: str | None = None,
+        all_worktrees: bool = False,
+        force: bool = False,
     ):
-        calls.append((root, name, current_path, terminate_timeout))
-        return SimpleNamespace(
-            branch="feature-a",
-            worktree_path=tmp_path / "feature-a",
-            pid=123,
-            action="stopped",
-            log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+        calls.append((root, current_path, name, all_worktrees, force))
+        return StopProcessPlan(
+            items=(),
+            apps=(
+                AppDownPlan(
+                    branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
+                    pid=123,
+                    action="stopped",
+                    log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+                ),
+            ),
         )
 
-    monkeypatch.setattr(cli, "execute_down", fake_execute_down, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "execute_stop_processes",
+        fake_execute_stop_processes,
+        raising=False,
+    )
 
-    result = runner.invoke(cli.app, ["down", "feature-a", "--timeout", "0"])
+    result = runner.invoke(cli.app, ["stop", "feature-a"])
 
     assert result.exit_code == 0
-    assert calls == [(tmp_path, "feature-a", Path.cwd(), 0.0)]
+    assert calls == [(tmp_path, Path.cwd(), "feature-a", False, False)]
     assert "stopped feature-a pid=123" in result.stdout
 
 
@@ -2319,29 +2330,29 @@ def test_repair_ports_previews_reassignment_plan(monkeypatch, tmp_path: Path) ->
     def fake_plan_port_repairs(root: Path, runner=None):
         assert root == tmp_path
         calls.append(runner)
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
                         ),
-                        SimpleNamespace(
+                        PortRepairServiceChange(
                             name="api",
                             port_env="API_PORT",
                             old_port=3334,
                             new_port=3338,
                         ),
-                    ],
-                )
-            ]
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)
@@ -2366,23 +2377,23 @@ def test_repair_ports_apply_updates_state_and_generated_files(
 
     def fake_execute_port_repairs(_runner, root: Path, apply: bool = False):
         calls.append((root, apply))
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
-                        )
-                    ],
-                )
-            ]
+                        ),
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "execute_port_repairs", fake_execute_port_repairs, raising=False)
@@ -2406,23 +2417,23 @@ def test_repair_ports_json_prints_machine_readable_plan(
 
     def fake_plan_port_repairs(root: Path, runner=None):
         assert root == tmp_path
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return PortRepairPlan(
+            items=(
+                PortRepairItem(
                     branch="feature-a",
                     slug="feature-a",
                     current_slot=1,
                     proposed_slot=5,
-                    services=[
-                        SimpleNamespace(
+                    services=(
+                        PortRepairServiceChange(
                             name="frontend",
                             port_env="FRONTEND_PORT",
                             old_port=4201,
                             new_port=4205,
-                        )
-                    ],
-                )
-            ]
+                        ),
+                    ),
+                ),
+            )
         )
 
     monkeypatch.setattr(cli, "plan_port_repairs", fake_plan_port_repairs, raising=False)
@@ -2494,7 +2505,7 @@ def test_ports_command_prints_json_owner_report(monkeypatch, tmp_path: Path) -> 
     assert payload["ports"][0]["owners"][0]["worktree_branch"] == "feature-a"
 
 
-def test_ps_command_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
+def test_ports_busy_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
 
     def fake_plan_workspace_ports(_runner, root: Path):
@@ -2532,7 +2543,7 @@ def test_ps_command_filters_to_busy_ports(monkeypatch, tmp_path: Path) -> None:
 
     monkeypatch.setattr(cli, "plan_workspace_ports", fake_plan_workspace_ports, raising=False)
 
-    result = runner.invoke(cli.app, ["ps"])
+    result = runner.invoke(cli.app, ["ports", "--busy"])
 
     assert result.exit_code == 0
     assert "feature-a" in result.stdout
@@ -2553,18 +2564,19 @@ def test_stop_command_terminates_matching_processes(monkeypatch, tmp_path: Path)
         force: bool = False,
     ):
         calls.append((root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(
-            items=[
-                SimpleNamespace(
+        return StopProcessPlan(
+            items=(
+                StopProcessItem(
                     action="stopped",
                     branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
                     service_name="frontend",
                     port_env="FRONTEND_PORT",
                     port=4201,
                     owner=PortOwner(pid=123, command="node", user="michael"),
                     reason="terminated",
-                )
-            ]
+                ),
+            )
         )
 
     monkeypatch.setattr(
@@ -2594,7 +2606,7 @@ def test_stop_command_passes_all_and_force(monkeypatch, tmp_path: Path) -> None:
         force: bool = False,
     ):
         calls.append((root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(items=())
 
     monkeypatch.setattr(
         cli,
@@ -2607,7 +2619,7 @@ def test_stop_command_passes_all_and_force(monkeypatch, tmp_path: Path) -> None:
 
     assert result.exit_code == 0
     assert calls == [(tmp_path, Path.cwd(), None, True, True)]
-    assert "No listener processes matched" in result.stdout
+    assert "No running processes matched" in result.stdout
 
 
 def test_restart_stops_then_starts_foreground_process(monkeypatch, tmp_path: Path) -> None:
@@ -2623,7 +2635,7 @@ def test_restart_stops_then_starts_foreground_process(monkeypatch, tmp_path: Pat
         force: bool = False,
     ):
         calls.append(("stop", root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(items=())
 
     def fake_execute_start(_runner, root: Path, name: str | None, current_path: Path) -> int:
         calls.append(("start", root, name, current_path))
@@ -2663,7 +2675,18 @@ def test_restart_detach_stops_then_starts_supervised_process(
         force: bool = False,
     ):
         calls.append(("stop", root, current_path, name, all_worktrees, force))
-        return SimpleNamespace(items=[])
+        return StopProcessPlan(
+            items=(),
+            apps=(
+                AppDownPlan(
+                    branch="feature-a",
+                    worktree_path=tmp_path / "feature-a",
+                    pid=123,
+                    action="stopped",
+                    log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
+                ),
+            ),
+        )
 
     def fake_execute_up(
         _runner,
@@ -2682,28 +2705,12 @@ def test_restart_detach_stops_then_starts_supervised_process(
             stale_pid=None,
         )
 
-    def fake_execute_down(
-        root: Path,
-        name: str | None,
-        current_path: Path,
-        terminate_timeout: float,
-    ):
-        calls.append(("down", root, name, current_path, terminate_timeout))
-        return SimpleNamespace(
-            branch="feature-a",
-            worktree_path=tmp_path / "feature-a",
-            pid=123,
-            action="stopped",
-            log_path=tmp_path / ".bonsai" / "logs" / "feature-a" / "start.log",
-        )
-
     monkeypatch.setattr(
         cli,
         "execute_stop_processes",
         fake_execute_stop_processes,
         raising=False,
     )
-    monkeypatch.setattr(cli, "execute_down", fake_execute_down, raising=False)
     monkeypatch.setattr(cli, "execute_up", fake_execute_up, raising=False)
 
     result = runner.invoke(
@@ -2713,7 +2720,6 @@ def test_restart_detach_stops_then_starts_supervised_process(
 
     assert result.exit_code == 0
     assert calls == [
-        ("down", tmp_path, "feature-a", Path.cwd(), 5.0),
         ("stop", tmp_path, Path.cwd(), "feature-a", False, True),
         ("up", tmp_path, "feature-a", Path.cwd(), 0.5),
     ]

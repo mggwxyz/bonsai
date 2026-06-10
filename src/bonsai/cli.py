@@ -17,7 +17,6 @@ from rich.console import Console
 from rich.markup import escape
 
 from bonsai import __version__
-from bonsai.agent import render_agent_context
 from bonsai.command_results import (
     CommandRenderable,
     render_cleanup_result,
@@ -26,13 +25,14 @@ from bonsai.command_results import (
     render_repair_result,
     render_stop_result,
     render_sync_result,
+    validate_output_format,
 )
-from bonsai.doctor import preflight_report, render_doctor_json, validate_doctor_format
+from bonsai.doctor import preflight_report, render_doctor_json
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
 from bonsai.models import OpenUrlPlan
 from bonsai.onboarding import write_guided_config as onboarding_write_guided_config
-from bonsai.port_repair import render_port_repair_json, validate_port_repair_format
+from bonsai.port_repair import render_port_repair_json
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
 from bonsai.status import (
@@ -48,7 +48,6 @@ from bonsai.workflows import (
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
-    execute_down,
     execute_init,
     execute_move,
     execute_port_repairs,
@@ -58,7 +57,6 @@ from bonsai.workflows import (
     execute_stop_processes,
     execute_sync,
     execute_up,
-    plan_agent_context,
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
@@ -202,12 +200,6 @@ def _render_up_result(plan) -> str:
     if plan.ready_ports:
         lines.append("ready ports: " + ", ".join(str(port) for port in plan.ready_ports))
     return "\n".join(lines) + "\n"
-
-
-def _render_down_result(plan) -> str:
-    if plan.pid is None:
-        return f"{plan.action} {plan.branch}\n"
-    return f"{plan.action} {plan.branch} pid={plan.pid}\n"
 
 
 def _complete_worktree_names(incomplete: str) -> list[str]:
@@ -683,7 +675,7 @@ def remove_command(
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
-        if getattr(plan, "compose_project_name", None) is not None:
+        if plan.compose_project_name is not None:
             console.print(f"compose down {plan.compose_project_name}")
         console.print(f"Removed worktree: {plan.worktree_path}")
     except BonsaiError as exc:
@@ -841,13 +833,8 @@ def context_command(
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
 ) -> None:
-    """Print Bonsai facts for the current worktree."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        context = plan_agent_context(root_path, Path.cwd())
-        typer.echo(render_agent_context(context, output_format), nl=False)
-    except BonsaiError as exc:
-        _fail(exc)
+    """Print Bonsai facts for the current worktree (alias of status)."""
+    status_command(output_format)
 
 
 @app.command("shell-init")
@@ -900,32 +887,16 @@ def ports_command(
         str,
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
+    busy: Annotated[
+        bool,
+        typer.Option("--busy", help="Only show ports that currently have listeners."),
+    ] = False,
 ) -> None:
     """List configured service ports and listener ownership."""
     try:
         root_path = find_workspace_root(Path.cwd())
         plan = plan_workspace_ports(SubprocessRunner(), root_path)
-        rendered = render_workspace_ports(plan, output_format)
-        if isinstance(rendered, str):
-            typer.echo(rendered, nl=False)
-        else:
-            console.print(rendered)
-    except BonsaiError as exc:
-        _fail(exc)
-
-
-@app.command("ps")
-def ps_command(
-    output_format: Annotated[
-        str,
-        typer.Option("--format", help="Output format: text or json."),
-    ] = "text",
-) -> None:
-    """List configured service ports that currently have listeners."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        plan = plan_workspace_ports(SubprocessRunner(), root_path)
-        rendered = render_workspace_ports(plan, output_format, only_busy=True)
+        rendered = render_workspace_ports(plan, output_format, only_busy=busy)
         if isinstance(rendered, str):
             typer.echo(rendered, nl=False)
         else:
@@ -1001,31 +972,6 @@ def up_command(
         _fail(exc)
 
 
-@app.command("down")
-def down_command(
-    name: Annotated[
-        str | None,
-        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
-    ] = None,
-    timeout: Annotated[
-        float,
-        typer.Option("--timeout", help="Seconds to wait before force killing the tracked PID."),
-    ] = 5.0,
-) -> None:
-    """Stop a background app process started by `bonsai up`."""
-    try:
-        root_path = find_workspace_root(Path.cwd())
-        plan = execute_down(
-            root_path,
-            name,
-            Path.cwd(),
-            terminate_timeout=timeout,
-        )
-        typer.echo(_render_down_result(plan), nl=False)
-    except BonsaiError as exc:
-        _fail(exc)
-
-
 @app.command("stop")
 def stop_command(
     name: Annotated[
@@ -1082,10 +1028,6 @@ def restart_command(
         label = name or "current worktree"
         console.print(f"Restarting {label}")
         runner = SubprocessRunner()
-        if detach:
-            down_plan = execute_down(root_path, name, Path.cwd(), terminate_timeout=5.0)
-            if down_plan.action != "not-running":
-                typer.echo(_render_down_result(down_plan), nl=False)
         stop_plan = execute_stop_processes(
             runner,
             root_path,
@@ -1171,7 +1113,7 @@ def repair_ports(
 ) -> None:
     """Plan or apply slot reassignments for worktrees with conflicting ports."""
     try:
-        output_format = validate_port_repair_format(output_format)
+        output_format = validate_output_format(output_format)
         root_path = find_workspace_root(Path.cwd())
         runner = SubprocessRunner()
         plan = (
@@ -1221,7 +1163,7 @@ def doctor(
 ) -> None:
     """Check workspace health and report repair hints."""
     try:
-        output_format = validate_doctor_format(output_format)
+        output_format = validate_output_format(output_format)
         if preflight:
             repo_path = Path.cwd()
             report = preflight_report(SubprocessRunner(), repo_path)

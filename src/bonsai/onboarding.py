@@ -128,160 +128,71 @@ def detect_project_defaults(
     )
 
 
+@dataclass(frozen=True)
+class _StackCommands:
+    install_command: str | None
+    start_command: str | None
+    service_name: str
+    port_env: str
+    base_port: int
+
+
+def _non_npm_stack_commands(repo_path: Path) -> _StackCommands | None:
+    """First matching stack wins: Python, Go, Rails, Compose, Makefile."""
+    pyproject = repo_path / "pyproject.toml"
+    requirements = repo_path / "requirements.txt"
+    if pyproject.exists() or requirements.exists():
+        if (repo_path / "uv.lock").exists():
+            install_command = "uv sync"
+        elif requirements.exists():
+            install_command = "pip install -r requirements.txt"
+        else:
+            install_command = None
+        return _StackCommands(
+            install_command=install_command,
+            start_command=_pyproject_start_command(pyproject),
+            service_name="api",
+            port_env="API_PORT",
+            base_port=8000,
+        )
+    if (repo_path / "go.mod").exists():
+        return _StackCommands("go mod download", "go run .", "app", "PORT", 8080)
+    if (repo_path / "Gemfile").exists():
+        return _StackCommands("bundle install", "bin/rails server", "web", "PORT", 3000)
+    if detect_compose_project(repo_path) is not None:
+        return _StackCommands(None, "docker compose up", "app", "PORT", 8080)
+    makefile = repo_path / "Makefile"
+    if makefile.exists():
+        targets = _makefile_targets(makefile)
+        install_command = "make install" if "install" in targets else None
+        start_command = next(
+            (f"make {target}" for target in ("dev", "run") if target in targets),
+            "make" if "make" in targets else None,
+        )
+        return _StackCommands(install_command, start_command, "app", "PORT", 8080)
+    return None
+
+
 def _detect_non_npm_stack(
     repo_path: Path,
     fallback_name: str,
     base_branch: str,
 ) -> ProjectDefaults | None:
-    detectors = (
-        _detect_python_stack,
-        _detect_go_stack,
-        _detect_rails_stack,
-        _detect_compose_stack,
-        _detect_makefile_stack,
-    )
-    for detector in detectors:
-        detected = detector(repo_path, fallback_name, base_branch)
-        if detected is not None:
-            return detected
-    return None
-
-
-def _stack_defaults(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-    *,
-    install_command: str | None,
-    start_command: str | None,
-    service_name: str,
-    port_env: str,
-    base_port: int,
-) -> ProjectDefaults:
+    commands = _non_npm_stack_commands(repo_path)
+    if commands is None:
+        return None
     app_slug = branch_slug(fallback_name) or "app"
     return ProjectDefaults(
         app_name=app_slug,
         base_branch=base_branch,
-        install_command=install_command,
+        install_command=commands.install_command,
         setup_command=None,
-        start_command=start_command,
+        start_command=commands.start_command,
         has_env_file=(repo_path / ".env").exists(),
-        service_name=service_name,
-        port_env=port_env,
-        base_port=base_port,
+        service_name=commands.service_name,
+        port_env=commands.port_env,
+        base_port=commands.base_port,
         url=f"https://${{slug}}.{app_slug}.localhost",
-    )
-
-
-def _detect_python_stack(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-) -> ProjectDefaults | None:
-    pyproject = repo_path / "pyproject.toml"
-    requirements = repo_path / "requirements.txt"
-    if not pyproject.exists() and not requirements.exists():
-        return None
-
-    if (repo_path / "uv.lock").exists():
-        install_command = "uv sync"
-    elif requirements.exists():
-        install_command = "pip install -r requirements.txt"
-    else:
-        install_command = None
-
-    return _stack_defaults(
-        repo_path,
-        fallback_name,
-        base_branch,
-        install_command=install_command,
-        start_command=_pyproject_start_command(pyproject),
-        service_name="api",
-        port_env="API_PORT",
-        base_port=8000,
-    )
-
-
-def _detect_go_stack(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-) -> ProjectDefaults | None:
-    if not (repo_path / "go.mod").exists():
-        return None
-    return _stack_defaults(
-        repo_path,
-        fallback_name,
-        base_branch,
-        install_command="go mod download",
-        start_command="go run .",
-        service_name="app",
-        port_env="PORT",
-        base_port=8080,
-    )
-
-
-def _detect_rails_stack(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-) -> ProjectDefaults | None:
-    if not (repo_path / "Gemfile").exists():
-        return None
-    return _stack_defaults(
-        repo_path,
-        fallback_name,
-        base_branch,
-        install_command="bundle install",
-        start_command="bin/rails server",
-        service_name="web",
-        port_env="PORT",
-        base_port=3000,
-    )
-
-
-def _detect_compose_stack(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-) -> ProjectDefaults | None:
-    if detect_compose_project(repo_path) is None:
-        return None
-    return _stack_defaults(
-        repo_path,
-        fallback_name,
-        base_branch,
-        install_command=None,
-        start_command="docker compose up",
-        service_name="app",
-        port_env="PORT",
-        base_port=8080,
-    )
-
-
-def _detect_makefile_stack(
-    repo_path: Path,
-    fallback_name: str,
-    base_branch: str,
-) -> ProjectDefaults | None:
-    makefile = repo_path / "Makefile"
-    if not makefile.exists():
-        return None
-    targets = _makefile_targets(makefile)
-    install_command = "make install" if "install" in targets else None
-    start_command = next(
-        (f"make {target}" for target in ("dev", "run") if target in targets),
-        "make" if "make" in targets else None,
-    )
-    return _stack_defaults(
-        repo_path,
-        fallback_name,
-        base_branch,
-        install_command=install_command,
-        start_command=start_command,
-        service_name="app",
-        port_env="PORT",
-        base_port=8080,
     )
 
 
@@ -289,9 +200,6 @@ def render_starter_config(config: StarterConfig) -> str:
     lines = [
         f"name = {_toml_string(config.name)}",
         f"base_branch = {_toml_string(config.base_branch)}",
-        "",
-        "[workspace]",
-        'default_parent = "~/Projects"',
         "",
         "[caddy]",
         "auto_install = true",

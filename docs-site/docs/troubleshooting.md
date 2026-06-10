@@ -29,6 +29,8 @@ If state points at missing or mis-slotted managed worktrees, preview structural 
 bonsai repair
 ```
 
+`repair` removes missing managed worktree entries from `.bonsai/state.json` and repacks surviving managed slots. Paths that still exist but are not git worktrees are reported as warnings and left in state.
+
 Apply the state repair, then refresh generated files:
 
 ```bash
@@ -76,10 +78,10 @@ Run:
 ```bash
 bonsai ports
 bonsai ports --format json
-bonsai ps
+bonsai ports --busy
 ```
 
-`ports` lists every configured service port and uses `lsof` to identify listening processes when available. `ps` shows the same data filtered to ports with listeners. Port statuses are `free`, `owned`, `conflict`, or `unknown`.
+`ports` lists every configured service port and uses `lsof` to identify listening processes when available. `ports --busy` shows the same data filtered to ports with listeners. Port statuses are `free`, `owned`, `conflict`, or `unknown`.
 
 ## Stop Or Restart A Worktree App
 
@@ -91,7 +93,7 @@ bonsai stop ma-123-implement-auth
 bonsai restart ma-123-implement-auth
 ```
 
-`stop` terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching listeners for every worktree.
+`stop` first terminates the worktree's tracked background process from `bonsai up`, then terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching processes for every worktree.
 
 ## Checkout Does Not Change Directories
 
