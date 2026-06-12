@@ -4,7 +4,6 @@ import json
 from collections.abc import Iterable
 from typing import Any
 
-from rich.table import Table
 from rich.text import Text
 
 from bonsai.command_results import validate_output_format
@@ -167,22 +166,24 @@ def _format_port_owners(port: WorkspacePort) -> str:
     return "\n".join(owner_label(owner) for owner in port.owners)
 
 
-def _workspace_ports_table(plan: WorkspacePortsPlan, *, only_busy: bool = False) -> Table:
-    table = Table(title="Bonsai ports")
-    table.add_column("Branch")
-    table.add_column("Service")
-    table.add_column("Port", justify="right")
-    table.add_column("Status")
-    table.add_column("Owners")
-    for port in _filtered_workspace_ports(plan.ports, only_busy=only_busy):
-        table.add_row(
-            port.branch,
-            f"{port.service_name}\n{port.port_env}",
-            str(port.port),
-            port.status,
-            _format_port_owners(port),
-        )
-    return table
+def _workspace_ports_lines(plan: WorkspacePortsPlan, *, only_busy: bool = False) -> str:
+    ports = _filtered_workspace_ports(plan.ports, only_busy=only_busy)
+    lines = ["Bonsai ports"]
+    if not ports:
+        lines.append("No ports matched")
+        return "\n".join(lines) + "\n"
+
+    for port in ports:
+        lines.append("")
+        lines.append(f"{port.branch} / {port.service_name}")
+        lines.append(f"{port.port_env}={port.port} [{port.status}]")
+        lines.append(f"Worktree: {port.worktree_path}")
+        if port.owners:
+            lines.append("Owners:")
+            lines.extend(f"  {owner}" for owner in _format_port_owners(port).splitlines())
+        else:
+            lines.append("Owners: none")
+    return "\n".join(lines) + "\n"
 
 
 def _workspace_list_lines(summary: WorkspaceSummary) -> str:
@@ -275,7 +276,7 @@ def render_workspace_ports(
     output_format: str,
     *,
     only_busy: bool = False,
-) -> str | Table:
+) -> str:
     output_format = validate_output_format(output_format)
     if output_format == "json":
         return json.dumps(
@@ -283,7 +284,7 @@ def render_workspace_ports(
             indent=2,
             sort_keys=True,
         ) + "\n"
-    return _workspace_ports_table(plan, only_busy=only_busy)
+    return _workspace_ports_lines(plan, only_busy=only_busy)
 
 
 def render_workspace_urls(plan: WorkspaceUrlsPlan, output_format: str) -> str:

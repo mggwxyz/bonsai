@@ -66,6 +66,7 @@ from bonsai.workflows import (
     execute_start,
     execute_stop_processes,
     execute_sync,
+    execute_tmux,
     execute_up,
     execute_worktree_command,
     plan_all_workspace_summaries,
@@ -304,6 +305,17 @@ def _render_up_result(plan) -> str:
     lines.append(f"log: {plan.log_path}")
     if plan.ready_ports:
         lines.append("ready ports: " + ", ".join(str(port) for port in plan.ready_ports))
+    return "\n".join(lines) + "\n"
+
+
+def _render_tmux_result(plan) -> str:
+    action = "created" if plan.created else "existing"
+    lines = [
+        f"{action} tmux session {plan.session_name}",
+        f"branch: {plan.branch}",
+        f"worktree: {plan.worktree_path}",
+        f"attach: {plan.attach_command}",
+    ]
     return "\n".join(lines) + "\n"
 
 
@@ -1163,10 +1175,7 @@ def ports_command(
         root_path = find_workspace_root(Path.cwd())
         plan = plan_workspace_ports(SubprocessRunner(), root_path)
         rendered = render_workspace_ports(plan, output_format, only_busy=busy)
-        if isinstance(rendered, str):
-            typer.echo(rendered, nl=False)
-        else:
-            console.print(rendered)
+        typer.echo(rendered, nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -1234,6 +1243,22 @@ def up_command(
             readiness_timeout=wait_timeout,
         )
         typer.echo(_render_up_result(plan), nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("tmux")
+def tmux_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+) -> None:
+    """Start the configured app command in a deterministic tmux session."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        plan = execute_tmux(SubprocessRunner(), root_path, name, Path.cwd())
+        typer.echo(_render_tmux_result(plan), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 

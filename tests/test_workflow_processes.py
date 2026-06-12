@@ -1,3 +1,4 @@
+import hashlib
 import json
 import signal
 from pathlib import Path
@@ -22,6 +23,7 @@ from bonsai.workflows import (
     execute_each_command,
     execute_start,
     execute_stop_processes,
+    execute_tmux,
     execute_up,
     execute_worktree_command,
     plan_app_processes,
@@ -750,6 +752,66 @@ def test_execute_up_replaces_stale_record_and_tracks_detached_process(
     assert record["worktree_path"] == str(feature_worktree)
     assert record["command"] == ["yarn", "dev"]
     assert record["log_path"] == str(plan.log_path)
+
+
+def test_execute_tmux_creates_deterministic_session_with_start_env(tmp_path: Path) -> None:
+    workspace_root, default_worktree, feature_worktree = _write_exec_workspace(tmp_path)
+
+    class TmuxRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:2] == ["tmux", "has-session"]:
+                return CommandResult(returncode=1)
+            return CommandResult(returncode=0)
+
+    runner = TmuxRunner()
+
+    plan = execute_tmux(runner, workspace_root, "feature", default_worktree)
+
+    root_hash = hashlib.sha1(str(workspace_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    assert plan.branch == "feature"
+    assert plan.worktree_path == feature_worktree
+    assert plan.session_name == f"bonsai-authentic-feature-{root_hash}"
+    assert plan.attach_command == f"tmux attach -t {plan.session_name}"
+    assert plan.created is True
+    assert runner.commands[0] == CommandSpec(
+        argv=("tmux", "has-session", "-t", plan.session_name)
+    )
+
+    new_session = runner.commands[1]
+    assert new_session.cwd is None
+    assert new_session.argv[:7] == (
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        plan.session_name,
+        "-c",
+        str(feature_worktree),
+    )
+    assert "-e" in new_session.argv
+    assert "FRONTEND_PORT=4201" in new_session.argv
+    assert "BONSAI_BRANCH=feature" in new_session.argv
+    assert new_session.argv[-2:] == ("--", "yarn dev")
+
+
+def test_execute_tmux_reports_existing_session_without_starting(tmp_path: Path) -> None:
+    workspace_root, default_worktree, _feature_worktree = _write_exec_workspace(tmp_path)
+
+    class ExistingTmuxRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            return CommandResult(returncode=0)
+
+    runner = ExistingTmuxRunner()
+
+    plan = execute_tmux(runner, workspace_root, "feature", default_worktree)
+
+    assert plan.created is False
+    assert len(runner.commands) == 1
+    assert runner.commands[0].argv == ("tmux", "has-session", "-t", plan.session_name)
 
 
 def test_execute_up_refuses_when_tracked_process_is_alive(

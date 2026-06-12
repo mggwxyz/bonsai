@@ -39,6 +39,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `status`
 * `start`: Run the configured start command in a...
 * `up`: Start the configured app command in the...
+* `tmux`: Start the configured app command in a...
 * `stop`: Stop listener processes for configured...
 * `restart`: Stop matching listeners, then run the...
 * `exec`: Run a command in one worktree with its...
@@ -385,6 +386,24 @@ $ bonsai up [OPTIONS] [NAME]
 **Options**:
 
 * `--wait-timeout FLOAT`: Seconds to wait for the primary service port.  [default: 30.0]
+* `--help`: Show this message and exit.
+
+## `bonsai tmux`
+
+Start the configured app command in a deterministic tmux session.
+
+**Usage**:
+
+```console
+$ bonsai tmux [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
 * `--help`: Show this message and exit.
 
 ## `bonsai stop`

@@ -57,6 +57,23 @@ has a live tracked process, and suggest `bonsai stop <name>` or
 Use `bonsai ps` to list tracked background app processes across every
 registered Bonsai workspace.
 
+## Run in a Reattachable Tmux Session
+
+```bash
+bonsai tmux ma-123-implement-auth
+tmux attach -t bonsai-authentic-ma-123-implement-auth-1a2b3c4d
+```
+
+`tmux` starts the configured `[commands].start` command in a deterministic
+tmux session for the target worktree, with the generated `.env.local` values
+and standard Bonsai environment variables available to the process. Bonsai
+prints the exact `tmux attach -t ...` command after creating the session.
+
+If the session already exists, Bonsai does not start another copy; it reports
+the existing session and the same attach command. Session names include the
+workspace name, worktree slug, and a short workspace-root hash to avoid
+collisions between similarly named workspaces.
+
 ## Stop and Restart
 
 ```bash

@@ -2507,6 +2507,31 @@ def test_up_command_starts_detached_app(monkeypatch, tmp_path: Path) -> None:
     assert "ready ports: 4201" in result.stdout
 
 
+def test_tmux_command_reports_attach_command(monkeypatch, tmp_path: Path) -> None:
+    calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    def fake_execute_tmux(_runner, root: Path, name: str | None, current_path: Path):
+        calls.append((root, name, current_path))
+        return SimpleNamespace(
+            branch="feature-a",
+            worktree_path=tmp_path / "feature-a",
+            session_name="bonsai-authentic-feature-a-abcdef12",
+            attach_command="tmux attach -t bonsai-authentic-feature-a-abcdef12",
+            created=True,
+        )
+
+    monkeypatch.setattr(cli, "execute_tmux", fake_execute_tmux, raising=False)
+
+    result = runner.invoke(cli.app, ["tmux", "feature-a"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, "feature-a", Path.cwd())]
+    assert "created tmux session bonsai-authentic-feature-a-abcdef12" in result.stdout
+    assert "branch: feature-a" in result.stdout
+    assert "attach: tmux attach -t bonsai-authentic-feature-a-abcdef12" in result.stdout
+
+
 def test_stop_reports_tracked_app(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)

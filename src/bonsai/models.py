@@ -256,6 +256,15 @@ class AppUpPlan:
 
 
 @dataclass(frozen=True)
+class TmuxSessionPlan:
+    branch: str
+    worktree_path: Path
+    session_name: str
+    attach_command: str
+    created: bool
+
+
+@dataclass(frozen=True)
 class AppDownPlan:
     branch: str
     worktree_path: Path

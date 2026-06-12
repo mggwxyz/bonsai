@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shlex
@@ -25,6 +26,7 @@ from bonsai.models import (
     PortOwner,
     StopProcessItem,
     StopProcessPlan,
+    TmuxSessionPlan,
     WorkspacePort,
     WorktreeCommandResult,
     WorktreeTarget,
@@ -32,6 +34,7 @@ from bonsai.models import (
 from bonsai.process import Runner
 from bonsai.registry import read_workspace_registry
 from bonsai.rendering import standard_bonsai_env
+from bonsai.slug import branch_slug
 from bonsai.state import load_state
 from bonsai.workflows import probes
 from bonsai.workflows.inspection import (
@@ -605,6 +608,80 @@ def execute_up(
         log_path=log_path,
         ready_ports=ready_ports,
         stale_pid=stale_pid,
+    )
+
+
+def _tmux_session_name(state: BonsaiState, workspace_root: Path, target: WorktreeTarget) -> str:
+    workspace_slug = branch_slug(state.name) or "workspace"
+    root_hash = hashlib.sha1(str(workspace_root.resolve()).encode("utf-8")).hexdigest()[:8]
+    return f"bonsai-{workspace_slug}-{target.worktree.slug}-{root_hash}"
+
+
+def _tmux_env_args(env: Mapping[str, str]) -> list[str]:
+    args: list[str] = []
+    for name, value in sorted(env.items()):
+        args.extend(["-e", f"{name}={value}"])
+    return args
+
+
+def execute_tmux(
+    runner: Runner,
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+) -> TmuxSessionPlan:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    if config.commands.start is None:
+        raise BonsaiConfigError("Missing config key commands.start")
+
+    target = resolve_start_target(workspace_root, name, current_path)
+    session_name = _tmux_session_name(state, workspace_root, target)
+    attach_command = f"tmux attach -t {shlex.quote(session_name)}"
+
+    try:
+        existing = runner.run(
+            ["tmux", "has-session", "-t", session_name],
+            check=False,
+        )
+    except FileNotFoundError as exc:
+        raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
+
+    if existing.returncode == 0:
+        return TmuxSessionPlan(
+            branch=target.branch,
+            worktree_path=target.worktree_path,
+            session_name=session_name,
+            attach_command=attach_command,
+            created=False,
+        )
+
+    env = _start_environment(config, state, workspace_root, target)
+    start_command = shlex.join(shlex.split(config.commands.start))
+    try:
+        runner.run(
+            [
+                "tmux",
+                "new-session",
+                "-d",
+                "-s",
+                session_name,
+                "-c",
+                str(target.worktree_path),
+                *_tmux_env_args(env),
+                "--",
+                start_command,
+            ]
+        )
+    except FileNotFoundError as exc:
+        raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
+
+    return TmuxSessionPlan(
+        branch=target.branch,
+        worktree_path=target.worktree_path,
+        session_name=session_name,
+        attach_command=attach_command,
+        created=True,
     )
 
 

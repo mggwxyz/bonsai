@@ -4,7 +4,10 @@ from pathlib import Path
 from rich.text import Text
 
 from bonsai.models import (
+    PortOwner,
     UrlCheck,
+    WorkspacePort,
+    WorkspacePortsPlan,
     WorkspaceServiceSummary,
     WorkspaceStatus,
     WorkspaceSummary,
@@ -12,7 +15,12 @@ from bonsai.models import (
     WorkspaceUrlsPlan,
     WorktreeSummary,
 )
-from bonsai.status import render_workspace_list, render_workspace_status, render_workspace_urls
+from bonsai.status import (
+    render_workspace_list,
+    render_workspace_ports,
+    render_workspace_status,
+    render_workspace_urls,
+)
 
 
 def make_worktree_summary() -> WorktreeSummary:
@@ -97,6 +105,41 @@ def make_workspace_urls_plan() -> WorkspaceUrlsPlan:
     )
 
 
+def make_workspace_ports_plan() -> WorkspacePortsPlan:
+    return WorkspacePortsPlan(
+        workspace_root=Path("/workspace/authentic"),
+        ports=(
+            WorkspacePort(
+                branch="feature",
+                worktree_path=Path("/workspace/authentic/feature"),
+                service_name="frontend",
+                port_env="FRONTEND_PORT",
+                port=4201,
+                status="owned",
+                owners=(
+                    PortOwner(
+                        pid=123,
+                        command="node",
+                        user="michael",
+                        cwd=Path("/workspace/authentic/feature"),
+                        worktree_branch="feature",
+                        worktree_path=Path("/workspace/authentic/feature"),
+                    ),
+                ),
+            ),
+            WorkspacePort(
+                branch="main",
+                worktree_path=Path("/workspace/authentic/main"),
+                service_name="frontend",
+                port_env="FRONTEND_PORT",
+                port=4200,
+                status="free",
+                owners=(),
+            ),
+        ),
+    )
+
+
 def test_render_workspace_list_text_returns_simple_list() -> None:
     rendered = render_workspace_list(make_workspace_summary(), "text")
 
@@ -147,6 +190,26 @@ def test_render_workspace_urls_json_payload() -> None:
     assert payload["urls"][0]["branch"] == "feature"
     assert payload["urls"][0]["service"] == "frontend"
     assert payload["urls"][0]["checks"][1]["hint"] == "Run: bonsai start feature"
+
+
+def test_render_workspace_ports_text_returns_plain_lines() -> None:
+    rendered = render_workspace_ports(make_workspace_ports_plan(), "text")
+
+    assert isinstance(rendered, str)
+    assert "Bonsai ports" in rendered
+    assert "feature / frontend" in rendered
+    assert "FRONTEND_PORT=4201 [owned]" in rendered
+    assert "node[123] in feature" in rendered
+    assert "main / frontend" in rendered
+    assert "Owners: none" in rendered
+    assert "┏" not in rendered
+
+
+def test_render_workspace_ports_busy_filters_plain_lines() -> None:
+    rendered = render_workspace_ports(make_workspace_ports_plan(), "text", only_busy=True)
+
+    assert "feature / frontend" in rendered
+    assert "main / frontend" not in rendered
 
 
 def test_render_workspace_status_text_includes_current_details() -> None:
