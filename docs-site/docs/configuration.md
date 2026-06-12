@@ -168,10 +168,11 @@ values and cannot be overridden by `[[env]]`.
   it is the target of `bonsai open`.
 - `url` — local URL template, for example
   `https://${slug}.my-app.localhost`.
-- `start` — optional service startup command for `bonsai tmux`. When one or
-  more services define `start`, `bonsai tmux` runs those commands in separate
-  panes in one tmux window. This is separate from `[commands].start`, which
-  remains the single-command lifecycle path for `bonsai start` and `bonsai up`.
+- `start` — optional service startup command for `bonsai mux` (and its
+  `bonsai tmux` shorthand). When one or more services define `start`,
+  `bonsai mux` runs those commands in separate panes of one tmux, herdr, or
+  cmux session. This is separate from `[commands].start`, which remains the
+  single-command lifecycle path for `bonsai start` and `bonsai up`.
 
 ### `[caddy]`
 

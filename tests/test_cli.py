@@ -2603,6 +2603,109 @@ def test_tmux_command_switches_client_when_already_in_tmux(monkeypatch, tmp_path
     ]
 
 
+def test_mux_command_passes_backend_and_attaches_with_plan_command(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls = []
+    attach_calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    class FakeRunner:
+        def run_stream(self, argv):
+            attach_calls.append(tuple(argv))
+            return 0
+
+    def fake_execute_mux(_runner, root: Path, name: str | None, current_path: Path, backend: str):
+        calls.append((root, name, current_path, backend))
+        return SimpleNamespace(
+            branch="feature-a",
+            worktree_path=tmp_path / "feature-a",
+            session_name="bonsai-authentic-feature-a-abcdef12",
+            attach_command="herdr workspace focus 2",
+            created=True,
+            backend="herdr",
+        )
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "execute_mux", fake_execute_mux, raising=False)
+
+    result = runner.invoke(cli.app, ["mux", "feature-a", "--backend", "herdr"])
+
+    assert result.exit_code == 0
+    assert calls == [(tmp_path, "feature-a", Path.cwd(), "herdr")]
+    assert attach_calls == [("herdr", "workspace", "focus", "2")]
+    assert "created herdr session bonsai-authentic-feature-a-abcdef12" in result.stdout
+    assert "attach: herdr workspace focus 2" in result.stdout
+
+
+def test_mux_command_defaults_to_auto_and_detach_skips_attach(
+    monkeypatch, tmp_path: Path
+) -> None:
+    calls = []
+    attach_calls = []
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    class FakeRunner:
+        def run_stream(self, argv):
+            attach_calls.append(tuple(argv))
+            return 0
+
+    def fake_execute_mux(_runner, root: Path, name: str | None, current_path: Path, backend: str):
+        calls.append(backend)
+        return SimpleNamespace(
+            branch="feature-a",
+            worktree_path=tmp_path / "feature-a",
+            session_name="bonsai-authentic-feature-a-abcdef12",
+            attach_command="cmux select-workspace --workspace workspace:3",
+            created=False,
+            backend="cmux",
+        )
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "execute_mux", fake_execute_mux, raising=False)
+
+    result = runner.invoke(cli.app, ["mux", "feature-a", "--detach"])
+
+    assert result.exit_code == 0
+    assert calls == ["auto"]
+    assert attach_calls == []
+    assert "existing cmux session" in result.stdout
+    assert "attach: cmux select-workspace --workspace workspace:3" in result.stdout
+
+
+def test_mux_command_attaches_tmux_backend_with_tmux_rules(monkeypatch, tmp_path: Path) -> None:
+    attach_calls = []
+    monkeypatch.setenv("TMUX", "/tmp/tmux-501/default,123,0")
+    monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)
+
+    class FakeRunner:
+        def run_stream(self, argv):
+            attach_calls.append(tuple(argv))
+            return 0
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(
+        cli,
+        "execute_mux",
+        lambda _runner, _root, _name, _current_path, backend: SimpleNamespace(
+            branch="feature-a",
+            worktree_path=tmp_path / "feature-a",
+            session_name="bonsai-authentic-feature-a-abcdef12",
+            attach_command="tmux attach -t bonsai-authentic-feature-a-abcdef12",
+            created=False,
+            backend="tmux",
+        ),
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["mux", "feature-a"])
+
+    assert result.exit_code == 0
+    assert attach_calls == [
+        ("tmux", "switch-client", "-t", "bonsai-authentic-feature-a-abcdef12")
+    ]
+
+
 def test_stop_reports_tracked_app(monkeypatch, tmp_path: Path) -> None:
     calls = []
     monkeypatch.setattr(cli, "find_workspace_root", lambda _path: tmp_path)

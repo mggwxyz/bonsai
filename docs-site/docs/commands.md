@@ -39,6 +39,7 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `status`
 * `start`: Run the configured start command in a...
 * `up`: Start the configured app command in the...
+* `mux`: Start configured service commands in panes...
 * `tmux`: Start configured service commands in a...
 * `stop`: Stop listener processes for configured...
 * `restart`: Stop matching listeners, then run the...
@@ -388,9 +389,31 @@ $ bonsai up [OPTIONS] [NAME]
 * `--wait-timeout FLOAT`: Seconds to wait for the primary service port.  [default: 30.0]
 * `--help`: Show this message and exit.
 
+## `bonsai mux`
+
+Start configured service commands in panes of the detected multiplexer.
+
+**Usage**:
+
+```console
+$ bonsai mux [OPTIONS] [NAME]
+```
+
+**Arguments**:
+
+* `[NAME]`
+
+**Options**:
+
+* `--detach`: Create or report the session without attaching.
+* `--backend TEXT`: Multiplexer backend: `auto`, `tmux`, `herdr`, or `cmux`. `auto`
+  picks herdr or cmux when bonsai runs inside one, otherwise tmux.  [default: auto]
+* `--help`: Show this message and exit.
+
 ## `bonsai tmux`
 
-Start configured service commands in a deterministic tmux session.
+Start configured service commands in a deterministic tmux session. Equivalent
+to `bonsai mux --backend tmux`.
 
 **Usage**:
 

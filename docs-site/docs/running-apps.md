@@ -57,22 +57,42 @@ has a live tracked process, and suggest `bonsai stop <name>` or
 Use `bonsai ps` to list tracked background app processes across every
 registered Bonsai workspace.
 
-## Run in a Reattachable Tmux Session
+## Run in a Reattachable Multiplexer Session
 
 ```bash
-bonsai tmux ma-123-implement-auth
-bonsai tmux ma-123-implement-auth --detach
+bonsai mux ma-123-implement-auth
+bonsai mux ma-123-implement-auth --detach
+bonsai mux ma-123-implement-auth --backend cmux
+bonsai tmux ma-123-implement-auth        # same as: bonsai mux --backend tmux
 ```
 
-`tmux` starts configured service startup commands in a deterministic tmux
-session for the target worktree, with each service in its own pane in one
-window. Add `start = "..."` to individual `[[services]]` entries to use this
-multi-pane mode. If no services define `start`, Bonsai falls back to the
-single `[commands].start` command. The generated `.env.local` values and
-standard Bonsai environment variables are available to every pane. By default,
-Bonsai attaches to the tmux session after creating or finding it. Use
-`--detach` to leave the session running and print the exact
-`tmux attach -t ...` command instead.
+`mux` starts configured service startup commands in a deterministic session of
+your terminal multiplexer, with each service in its own pane. Add
+`start = "..."` to individual `[[services]]` entries to use this multi-pane
+mode. If no services define `start`, Bonsai falls back to the single
+`[commands].start` command. The generated `.env.local` values and standard
+Bonsai environment variables are available to every pane. By default, Bonsai
+attaches to (or focuses) the session after creating or finding it. Use
+`--detach` to leave the session running and print the exact attach command
+instead.
+
+The backend is detected automatically:
+
+- **herdr** when Bonsai runs inside a [herdr](https://herdr.dev) pane
+  (`HERDR_ENV=1`). Bonsai creates a herdr workspace labeled with the session
+  name and runs each service with `herdr pane run`.
+- **cmux** when Bonsai runs inside a [cmux](https://cmux.com) terminal
+  (`CMUX_SOCKET_PATH` or `CMUX_WORKSPACE_ID` set). Bonsai creates a cmux
+  workspace named after the session and starts extra services in splits.
+- **tmux** otherwise. Bonsai creates a detached session with one tiled window.
+
+Use `--backend tmux|herdr|cmux` to pick one explicitly; `bonsai tmux` remains
+a shorthand for the tmux backend. tmux passes the worktree environment to each
+pane natively, while herdr and cmux panes are interactive shells, so Bonsai
+prefixes each service command with `env KEY=VALUE ...` there. Note that the
+herdr and cmux backends require Bonsai to run inside those apps, since their
+CLIs talk to the running instance; tmux is the only backend that can create a
+session from a plain terminal.
 
 If the session already exists, Bonsai does not start another copy; it reports
 the existing session, then attaches unless `--detach` is set. Session names

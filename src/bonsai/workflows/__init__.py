@@ -18,6 +18,7 @@ from bonsai.workflows.maintenance import (
 )
 from bonsai.workflows.processes import (
     execute_each_command,
+    execute_mux,
     execute_start,
     execute_stop_processes,
     execute_tmux,
@@ -92,6 +93,7 @@ __all__ = [
     "execute_doctor_apply",
     "execute_init",
     "execute_move",
+    "execute_mux",
     "execute_port_repairs",
     "execute_remove",
     "execute_rename_default",
