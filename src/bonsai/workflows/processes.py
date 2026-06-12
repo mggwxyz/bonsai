@@ -675,6 +675,7 @@ def execute_tmux(
         )
 
     env = _start_environment(config, state, workspace_root, target)
+    tmux_window_target = f"{session_name}:services"
     try:
         first_pane = panes[0]
         runner.run(
@@ -700,7 +701,7 @@ def execute_tmux(
                     "split-window",
                     "-d",
                     "-t",
-                    f"{session_name}:0",
+                    tmux_window_target,
                     "-c",
                     str(target.worktree_path),
                     *_tmux_env_args(env),
@@ -709,7 +710,7 @@ def execute_tmux(
                 ]
             )
         if len(panes) > 1:
-            runner.run(["tmux", "select-layout", "-t", f"{session_name}:0", "tiled"])
+            runner.run(["tmux", "select-layout", "-t", tmux_window_target, "tiled"])
     except FileNotFoundError as exc:
         raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
 

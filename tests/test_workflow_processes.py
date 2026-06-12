@@ -866,7 +866,7 @@ def test_execute_tmux_creates_service_panes_when_services_define_start_commands(
         "split-window",
         "-d",
         "-t",
-        f"{plan.session_name}:0",
+        f"{plan.session_name}:services",
         "-c",
         str(feature_worktree),
     )
@@ -876,7 +876,7 @@ def test_execute_tmux_creates_service_panes_when_services_define_start_commands(
         "tmux",
         "select-layout",
         "-t",
-        f"{plan.session_name}:0",
+        f"{plan.session_name}:services",
         "tiled",
     )
 
