@@ -60,6 +60,7 @@ from bonsai.workflows import (
     execute_each_command,
     execute_init,
     execute_move,
+    execute_mux,
     execute_port_repairs,
     execute_remove,
     execute_repair,
@@ -308,10 +309,11 @@ def _render_up_result(plan) -> str:
     return "\n".join(lines) + "\n"
 
 
-def _render_tmux_result(plan) -> str:
+def _render_mux_result(plan) -> str:
     action = "created" if plan.created else "existing"
+    backend = getattr(plan, "backend", "tmux")
     lines = [
-        f"{action} tmux session {plan.session_name}",
+        f"{action} {backend} session {plan.session_name}",
         f"branch: {plan.branch}",
         f"worktree: {plan.worktree_path}",
         f"attach: {plan.attach_command}",
@@ -326,6 +328,12 @@ def _attach_tmux_session(runner: SubprocessRunner, session_name: str) -> int:
     if os.environ.get("TMUX"):
         return runner.run_stream(["tmux", "switch-client", "-t", session_name])
     return runner.run_stream(["tmux", "attach", "-t", session_name])
+
+
+def _attach_mux_session(runner: SubprocessRunner, plan) -> int:
+    if getattr(plan, "backend", "tmux") == "tmux":
+        return _attach_tmux_session(runner, plan.session_name)
+    return runner.run_stream(shlex.split(plan.attach_command))
 
 
 def _complete_worktree_names(incomplete: str) -> list[str]:
@@ -1256,6 +1264,38 @@ def up_command(
         _fail(exc)
 
 
+@app.command("mux")
+def mux_command(
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    detach: Annotated[
+        bool,
+        typer.Option("--detach", help="Create or report the session without attaching."),
+    ] = False,
+    backend: Annotated[
+        str,
+        typer.Option(
+            "--backend",
+            help="Multiplexer backend: auto, tmux, herdr, or cmux. "
+            "auto picks herdr or cmux when bonsai runs inside one, otherwise tmux.",
+        ),
+    ] = "auto",
+) -> None:
+    """Start configured service commands in panes of the detected multiplexer."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        runner = SubprocessRunner()
+        plan = execute_mux(runner, root_path, name, Path.cwd(), backend=backend)
+        typer.echo(_render_mux_result(plan), nl=False)
+        if detach:
+            return
+        raise typer.Exit(code=_attach_mux_session(runner, plan))
+    except BonsaiError as exc:
+        _fail(exc)
+
+
 @app.command("tmux")
 def tmux_command(
     name: Annotated[
@@ -1272,7 +1312,7 @@ def tmux_command(
         root_path = find_workspace_root(Path.cwd())
         runner = SubprocessRunner()
         plan = execute_tmux(runner, root_path, name, Path.cwd())
-        typer.echo(_render_tmux_result(plan), nl=False)
+        typer.echo(_render_mux_result(plan), nl=False)
         if detach:
             return
         raise typer.Exit(code=_attach_tmux_session(runner, plan.session_name))

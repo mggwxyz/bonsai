@@ -257,19 +257,20 @@ class AppUpPlan:
 
 
 @dataclass(frozen=True)
-class TmuxPanePlan:
+class MuxPanePlan:
     name: str
     command: str
 
 
 @dataclass(frozen=True)
-class TmuxSessionPlan:
+class MuxSessionPlan:
     branch: str
     worktree_path: Path
     session_name: str
     attach_command: str
     created: bool
-    panes: tuple[TmuxPanePlan, ...] = ()
+    backend: str = "tmux"
+    panes: tuple[MuxPanePlan, ...] = ()
 
 
 @dataclass(frozen=True)

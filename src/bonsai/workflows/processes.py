@@ -23,11 +23,11 @@ from bonsai.models import (
     BonsaiState,
     CommandLogPlan,
     EachCommandResult,
+    MuxPanePlan,
+    MuxSessionPlan,
     PortOwner,
     StopProcessItem,
     StopProcessPlan,
-    TmuxPanePlan,
-    TmuxSessionPlan,
     WorkspacePort,
     WorktreeCommandResult,
     WorktreeTarget,
@@ -40,6 +40,12 @@ from bonsai.state import load_state
 from bonsai.workflows import probes
 from bonsai.workflows.inspection import (
     plan_workspace_ports,
+)
+from bonsai.workflows.multiplexers import (
+    MUX_BACKEND_AUTO,
+    create_mux_session,
+    find_mux_session,
+    resolve_mux_backend,
 )
 from bonsai.workflows.shared import (
     _configured_worktree_targets,
@@ -612,22 +618,15 @@ def execute_up(
     )
 
 
-def _tmux_session_name(state: BonsaiState, workspace_root: Path, target: WorktreeTarget) -> str:
+def _mux_session_name(state: BonsaiState, workspace_root: Path, target: WorktreeTarget) -> str:
     workspace_slug = branch_slug(state.name) or "workspace"
     root_hash = hashlib.sha1(str(workspace_root.resolve()).encode("utf-8")).hexdigest()[:8]
     return f"bonsai-{workspace_slug}-{target.worktree.slug}-{root_hash}"
 
 
-def _tmux_env_args(env: Mapping[str, str]) -> list[str]:
-    args: list[str] = []
-    for name, value in sorted(env.items()):
-        args.extend(["-e", f"{name}={value}"])
-    return args
-
-
-def _tmux_panes(config: BonsaiConfig) -> tuple[TmuxPanePlan, ...]:
+def _mux_panes(config: BonsaiConfig) -> tuple[MuxPanePlan, ...]:
     service_panes = tuple(
-        TmuxPanePlan(name=service.name, command=service.start)
+        MuxPanePlan(name=service.name, command=service.start)
         for service in config.services
         if service.start is not None
     )
@@ -635,11 +634,55 @@ def _tmux_panes(config: BonsaiConfig) -> tuple[TmuxPanePlan, ...]:
         return service_panes
     if config.commands.start is None:
         raise BonsaiConfigError("Missing config key commands.start")
-    return (TmuxPanePlan(name="start", command=config.commands.start),)
+    return (MuxPanePlan(name="start", command=config.commands.start),)
 
 
-def _tmux_shell_command(command: str) -> str:
-    return shlex.join(shlex.split(command))
+def execute_mux(
+    runner: Runner,
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+    backend: str = MUX_BACKEND_AUTO,
+    environ: Mapping[str, str] | None = None,
+) -> MuxSessionPlan:
+    resolved_backend = resolve_mux_backend(backend, os.environ if environ is None else environ)
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    panes = _mux_panes(config)
+
+    target = resolve_start_target(workspace_root, name, current_path)
+    session_name = _mux_session_name(state, workspace_root, target)
+
+    attach_command = find_mux_session(runner, resolved_backend, session_name)
+    if attach_command is not None:
+        return MuxSessionPlan(
+            branch=target.branch,
+            worktree_path=target.worktree_path,
+            session_name=session_name,
+            attach_command=attach_command,
+            created=False,
+            backend=resolved_backend,
+            panes=panes,
+        )
+
+    env = _start_environment(config, state, workspace_root, target)
+    attach_command = create_mux_session(
+        runner,
+        resolved_backend,
+        session_name,
+        panes,
+        target.worktree_path,
+        env,
+    )
+    return MuxSessionPlan(
+        branch=target.branch,
+        worktree_path=target.worktree_path,
+        session_name=session_name,
+        attach_command=attach_command,
+        created=True,
+        backend=resolved_backend,
+        panes=panes,
+    )
 
 
 def execute_tmux(
@@ -647,81 +690,8 @@ def execute_tmux(
     workspace_root: Path,
     name: str | None,
     current_path: Path,
-) -> TmuxSessionPlan:
-    state = load_state(workspace_root / ".bonsai" / "state.json")
-    config = load_workspace_config(workspace_root, state)
-    panes = _tmux_panes(config)
-
-    target = resolve_start_target(workspace_root, name, current_path)
-    session_name = _tmux_session_name(state, workspace_root, target)
-    attach_command = f"tmux attach -t {shlex.quote(session_name)}"
-
-    try:
-        existing = runner.run(
-            ["tmux", "has-session", "-t", session_name],
-            check=False,
-        )
-    except FileNotFoundError as exc:
-        raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
-
-    if existing.returncode == 0:
-        return TmuxSessionPlan(
-            branch=target.branch,
-            worktree_path=target.worktree_path,
-            session_name=session_name,
-            attach_command=attach_command,
-            created=False,
-            panes=panes,
-        )
-
-    env = _start_environment(config, state, workspace_root, target)
-    tmux_window_target = f"{session_name}:services"
-    try:
-        first_pane = panes[0]
-        runner.run(
-            [
-                "tmux",
-                "new-session",
-                "-d",
-                "-s",
-                session_name,
-                "-n",
-                "services",
-                "-c",
-                str(target.worktree_path),
-                *_tmux_env_args(env),
-                "--",
-                _tmux_shell_command(first_pane.command),
-            ]
-        )
-        for pane in panes[1:]:
-            runner.run(
-                [
-                    "tmux",
-                    "split-window",
-                    "-d",
-                    "-t",
-                    tmux_window_target,
-                    "-c",
-                    str(target.worktree_path),
-                    *_tmux_env_args(env),
-                    "--",
-                    _tmux_shell_command(pane.command),
-                ]
-            )
-        if len(panes) > 1:
-            runner.run(["tmux", "select-layout", "-t", tmux_window_target, "tiled"])
-    except FileNotFoundError as exc:
-        raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
-
-    return TmuxSessionPlan(
-        branch=target.branch,
-        worktree_path=target.worktree_path,
-        session_name=session_name,
-        attach_command=attach_command,
-        created=True,
-        panes=panes,
-    )
+) -> MuxSessionPlan:
+    return execute_mux(runner, workspace_root, name, current_path, backend="tmux")
 
 
 def _stop_tracked_app(

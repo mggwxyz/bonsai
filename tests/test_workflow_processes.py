@@ -899,6 +899,291 @@ def test_execute_tmux_reports_existing_session_without_starting(tmp_path: Path) 
     assert runner.commands[0].argv == ("tmux", "has-session", "-t", plan.session_name)
 
 
+def _write_service_pane_workspace(tmp_path: Path) -> tuple[Path, Path, Path]:
+    workspace_root, default_worktree, feature_worktree = _write_exec_workspace(tmp_path)
+    config_text = (
+        VALID_CONFIG.replace(
+            'name = "frontend"\nport_env = "FRONTEND_PORT"',
+            'name = "frontend"\nstart = "yarn web"\nport_env = "FRONTEND_PORT"',
+        )
+        .replace(
+            'name = "api"\nport_env = "API_PORT"',
+            'name = "api"\nstart = "yarn api"\nport_env = "API_PORT"',
+        )
+        .replace('start = "yarn dev"\n', "")
+    )
+    write_config(default_worktree, config_text)
+    (feature_worktree / ".env.local").write_text(
+        "FRONTEND_PORT=4201\nAPI_PORT=3334\n",
+        encoding="utf-8",
+    )
+    return workspace_root, default_worktree, feature_worktree
+
+
+def _feature_pane_env(workspace_root: Path, feature_worktree: Path) -> dict[str, str]:
+    return dict(
+        _expected_command_env(
+            workspace_root,
+            "feature",
+            "feature",
+            1,
+            feature_worktree,
+            {"FRONTEND_PORT": "4201", "API_PORT": "3334"},
+        )
+    )
+
+
+class CannedRunner(RecordingRunner):
+    """Records commands and replies with canned stdout keyed by argv prefix."""
+
+    def __init__(self, replies: list[tuple[tuple[str, ...], CommandResult]]) -> None:
+        super().__init__()
+        self._replies = replies
+
+    def run(self, argv, cwd=None, check=True, env=None):
+        recorded_env = tuple(sorted(env.items())) if env is not None else ()
+        self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+        for prefix, result in self._replies:
+            if tuple(argv[: len(prefix)]) == prefix:
+                return result
+        return CommandResult(returncode=0)
+
+
+def test_execute_mux_auto_detects_herdr_and_creates_service_panes(tmp_path: Path) -> None:
+    workspace_root, default_worktree, feature_worktree = _write_service_pane_workspace(tmp_path)
+    runner = CannedRunner(
+        [
+            (
+                ("herdr", "workspace", "list"),
+                CommandResult(returncode=0, stdout='{"result": {"workspaces": []}}'),
+            ),
+            (
+                ("herdr", "workspace", "create"),
+                CommandResult(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {
+                            "result": {
+                                "workspace": {"workspace_id": 2},
+                                "tab": {"tab_id": "2:1"},
+                                "root_pane": {"pane_id": "2-1"},
+                            }
+                        }
+                    ),
+                ),
+            ),
+            (
+                ("herdr", "pane", "split"),
+                CommandResult(
+                    returncode=0,
+                    stdout='{"result": {"pane": {"pane_id": "2-2"}}}',
+                ),
+            ),
+        ]
+    )
+
+    plan = wf_processes.execute_mux(
+        runner,
+        workspace_root,
+        "feature",
+        default_worktree,
+        environ={"HERDR_ENV": "1"},
+    )
+
+    assert plan.backend == "herdr"
+    assert plan.created is True
+    assert plan.attach_command == "herdr workspace focus 2"
+    assert [(pane.name, pane.command) for pane in plan.panes] == [
+        ("frontend", "yarn web"),
+        ("api", "yarn api"),
+    ]
+
+    env = _feature_pane_env(workspace_root, feature_worktree)
+    expected_prefix = "env " + " ".join(f"{key}={env[key]}" for key in sorted(env))
+    assert [command.argv[:3] for command in runner.commands] == [
+        ("herdr", "workspace", "list"),
+        ("herdr", "workspace", "create"),
+        ("herdr", "pane", "run"),
+        ("herdr", "pane", "split"),
+        ("herdr", "pane", "run"),
+    ]
+    assert runner.commands[1].argv == (
+        "herdr",
+        "workspace",
+        "create",
+        "--cwd",
+        str(feature_worktree),
+        "--label",
+        plan.session_name,
+        "--no-focus",
+    )
+    first_run = runner.commands[2].argv
+    assert first_run[3] == "2-1"
+    assert first_run[4].startswith(expected_prefix)
+    assert first_run[4].endswith("yarn web")
+    assert runner.commands[3].argv == (
+        "herdr",
+        "pane",
+        "split",
+        "2-1",
+        "--direction",
+        "right",
+        "--no-focus",
+    )
+    second_run = runner.commands[4].argv
+    assert second_run[3] == "2-2"
+    assert second_run[4].endswith("yarn api")
+
+
+def test_execute_mux_reports_existing_herdr_workspace_without_starting(tmp_path: Path) -> None:
+    workspace_root, default_worktree, _feature_worktree = _write_service_pane_workspace(tmp_path)
+    runner = CannedRunner([])
+
+    def list_reply(session_name: str) -> str:
+        return json.dumps(
+            {
+                "result": {
+                    "workspaces": [
+                        {"workspace_id": 7, "label": session_name},
+                    ]
+                }
+            }
+        )
+
+    state_session = wf_processes._mux_session_name(
+        wf_processes.load_state(workspace_root / ".bonsai" / "state.json"),
+        workspace_root,
+        resolve_start_target(workspace_root, "feature", default_worktree),
+    )
+    runner._replies = [
+        (
+            ("herdr", "workspace", "list"),
+            CommandResult(returncode=0, stdout=list_reply(state_session)),
+        )
+    ]
+
+    plan = wf_processes.execute_mux(
+        runner,
+        workspace_root,
+        "feature",
+        default_worktree,
+        backend="herdr",
+    )
+
+    assert plan.created is False
+    assert plan.attach_command == "herdr workspace focus 7"
+    assert [command.argv[:3] for command in runner.commands] == [
+        ("herdr", "workspace", "list"),
+    ]
+
+
+def test_execute_mux_creates_cmux_workspace_with_splits(tmp_path: Path) -> None:
+    workspace_root, default_worktree, feature_worktree = _write_service_pane_workspace(tmp_path)
+    runner = CannedRunner(
+        [
+            (
+                ("cmux", "list-workspaces"),
+                CommandResult(returncode=0, stdout='{"workspaces": []}'),
+            ),
+            (
+                ("cmux", "new-workspace"),
+                CommandResult(
+                    returncode=0,
+                    stdout=json.dumps(
+                        {"workspaces": [{"ref": "workspace:3", "index": 3, "title": "ignored"}]}
+                    ),
+                ),
+            ),
+            (
+                ("cmux", "new-split"),
+                CommandResult(returncode=0, stdout='{"surface": {"ref": "surface:9"}}'),
+            ),
+        ]
+    )
+
+    plan = wf_processes.execute_mux(
+        runner,
+        workspace_root,
+        "feature",
+        default_worktree,
+        environ={"CMUX_SOCKET_PATH": "/tmp/cmux.sock"},
+    )
+
+    assert plan.backend == "cmux"
+    assert plan.created is True
+    assert plan.attach_command == "cmux select-workspace --workspace workspace:3"
+
+    env = _feature_pane_env(workspace_root, feature_worktree)
+    expected_prefix = "env " + " ".join(f"{key}={env[key]}" for key in sorted(env))
+    assert [command.argv[:2] for command in runner.commands] == [
+        ("cmux", "list-workspaces"),
+        ("cmux", "new-workspace"),
+        ("cmux", "new-split"),
+        ("cmux", "send"),
+    ]
+    new_workspace = runner.commands[1].argv
+    assert new_workspace == (
+        "cmux",
+        "new-workspace",
+        "--cwd",
+        str(feature_worktree),
+        "--name",
+        plan.session_name,
+        "--command",
+        new_workspace[7],
+        "--json",
+    )
+    assert new_workspace[7].startswith(expected_prefix)
+    assert new_workspace[7].endswith("yarn web")
+    assert runner.commands[2].argv == (
+        "cmux",
+        "new-split",
+        "right",
+        "--workspace",
+        "workspace:3",
+        "--json",
+    )
+    send = runner.commands[3].argv
+    assert send[:4] == ("cmux", "send", "--surface", "surface:9")
+    assert send[4].endswith("yarn api\n")
+
+
+def test_execute_mux_raises_when_herdr_cli_fails(tmp_path: Path) -> None:
+    workspace_root, default_worktree, _feature_worktree = _write_service_pane_workspace(tmp_path)
+    runner = CannedRunner(
+        [
+            (
+                ("herdr", "workspace", "list"),
+                CommandResult(returncode=1, stderr="no herdr server running"),
+            )
+        ]
+    )
+
+    with pytest.raises(BonsaiWorkspaceError) as excinfo:
+        wf_processes.execute_mux(
+            runner,
+            workspace_root,
+            "feature",
+            default_worktree,
+            backend="herdr",
+        )
+
+    assert "no herdr server running" in str(excinfo.value)
+
+
+def test_execute_mux_rejects_unknown_backend(tmp_path: Path) -> None:
+    workspace_root, default_worktree, _feature_worktree = _write_exec_workspace(tmp_path)
+
+    with pytest.raises(BonsaiWorkspaceError, match="Unknown multiplexer backend"):
+        wf_processes.execute_mux(
+            RecordingRunner(),
+            workspace_root,
+            "feature",
+            default_worktree,
+            backend="screen",
+        )
+
+
 def test_execute_up_refuses_when_tracked_process_is_alive(
     tmp_path: Path,
     monkeypatch,
