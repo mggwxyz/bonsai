@@ -47,6 +47,7 @@ class ServiceConfig:
     public: bool = True
     primary: bool = False
     url: str | None = None
+    start: str | None = None
 
 
 @dataclass(frozen=True)
@@ -256,12 +257,19 @@ class AppUpPlan:
 
 
 @dataclass(frozen=True)
+class TmuxPanePlan:
+    name: str
+    command: str
+
+
+@dataclass(frozen=True)
 class TmuxSessionPlan:
     branch: str
     worktree_path: Path
     session_name: str
     attach_command: str
     created: bool
+    panes: tuple[TmuxPanePlan, ...] = ()
 
 
 @dataclass(frozen=True)

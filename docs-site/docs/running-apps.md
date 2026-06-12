@@ -61,18 +61,23 @@ registered Bonsai workspace.
 
 ```bash
 bonsai tmux ma-123-implement-auth
-tmux attach -t bonsai-authentic-ma-123-implement-auth-1a2b3c4d
+bonsai tmux ma-123-implement-auth --detach
 ```
 
-`tmux` starts the configured `[commands].start` command in a deterministic
-tmux session for the target worktree, with the generated `.env.local` values
-and standard Bonsai environment variables available to the process. Bonsai
-prints the exact `tmux attach -t ...` command after creating the session.
+`tmux` starts configured service startup commands in a deterministic tmux
+session for the target worktree, with each service in its own pane in one
+window. Add `start = "..."` to individual `[[services]]` entries to use this
+multi-pane mode. If no services define `start`, Bonsai falls back to the
+single `[commands].start` command. The generated `.env.local` values and
+standard Bonsai environment variables are available to every pane. By default,
+Bonsai attaches to the tmux session after creating or finding it. Use
+`--detach` to leave the session running and print the exact
+`tmux attach -t ...` command instead.
 
 If the session already exists, Bonsai does not start another copy; it reports
-the existing session and the same attach command. Session names include the
-workspace name, worktree slug, and a short workspace-root hash to avoid
-collisions between similarly named workspaces.
+the existing session, then attaches unless `--detach` is set. Session names
+include the workspace name, worktree slug, and a short workspace-root hash to
+avoid collisions between similarly named workspaces.
 
 ## Stop and Restart
 

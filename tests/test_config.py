@@ -79,6 +79,7 @@ def test_load_config_parses_valid_file(tmp_path: Path) -> None:
     assert config.env[0].name == "COMPOSE_PROJECT_NAME"
     assert [service.name for service in config.services] == ["frontend", "api", "db"]
     assert config.services[0].base_port == 4200
+    assert config.services[0].start is None
     assert config.primary_service().name == "frontend"
     assert config.browser_extension.extension_id is None
 
@@ -262,6 +263,24 @@ def test_load_config_parses_optional_pre_and_post_commands(tmp_path: Path) -> No
     assert config.commands.preremove == "yarn preremove"
     assert config.commands.prestart == "yarn prestart"
     assert config.commands.poststart == "yarn poststart"
+
+
+def test_load_config_parses_service_start_commands(tmp_path: Path) -> None:
+    text = VALID_CONFIG.replace(
+        'name = "frontend"\nport_env = "FRONTEND_PORT"',
+        'name = "frontend"\nstart = "yarn web"\nport_env = "FRONTEND_PORT"',
+    ).replace(
+        'name = "api"\nport_env = "API_PORT"',
+        'name = "api"\nstart = "yarn api"\nport_env = "API_PORT"',
+    )
+
+    config = load_config(write_config(tmp_path, text))
+
+    assert [(service.name, service.start) for service in config.services] == [
+        ("frontend", "yarn web"),
+        ("api", "yarn api"),
+        ("db", None),
+    ]
 
 
 @pytest.mark.parametrize("mode", ["concurrent", "single"])

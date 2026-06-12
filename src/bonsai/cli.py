@@ -316,7 +316,16 @@ def _render_tmux_result(plan) -> str:
         f"worktree: {plan.worktree_path}",
         f"attach: {plan.attach_command}",
     ]
+    panes = getattr(plan, "panes", ())
+    if panes:
+        lines.append("panes: " + ", ".join(pane.name for pane in panes))
     return "\n".join(lines) + "\n"
+
+
+def _attach_tmux_session(runner: SubprocessRunner, session_name: str) -> int:
+    if os.environ.get("TMUX"):
+        return runner.run_stream(["tmux", "switch-client", "-t", session_name])
+    return runner.run_stream(["tmux", "attach", "-t", session_name])
 
 
 def _complete_worktree_names(incomplete: str) -> list[str]:
@@ -1253,12 +1262,20 @@ def tmux_command(
         str | None,
         typer.Argument(autocompletion=_complete_worktree_names_for_typer),
     ] = None,
+    detach: Annotated[
+        bool,
+        typer.Option("--detach", help="Create or report the tmux session without attaching."),
+    ] = False,
 ) -> None:
-    """Start the configured app command in a deterministic tmux session."""
+    """Start configured service commands in a deterministic tmux session."""
     try:
         root_path = find_workspace_root(Path.cwd())
-        plan = execute_tmux(SubprocessRunner(), root_path, name, Path.cwd())
+        runner = SubprocessRunner()
+        plan = execute_tmux(runner, root_path, name, Path.cwd())
         typer.echo(_render_tmux_result(plan), nl=False)
+        if detach:
+            return
+        raise typer.Exit(code=_attach_tmux_session(runner, plan.session_name))
     except BonsaiError as exc:
         _fail(exc)
 

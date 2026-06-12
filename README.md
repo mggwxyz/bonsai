@@ -96,10 +96,18 @@ mode = "copy"
 
 [[services]]
 name = "frontend"
+start = "npm run dev:web"
 port_env = "FRONTEND_PORT"
 base_port = 4200
 primary = true
 url = "https://${slug}.my-app.localhost"
+
+[[services]]
+name = "api"
+start = "npm run dev:api"
+port_env = "API_PORT"
+base_port = 3333
+url = "https://api-${slug}.my-app.localhost"
 ```
 
 Every key is documented in the [Configuration guide](https://mggwxyz.github.io/bonsai/docs/configuration).

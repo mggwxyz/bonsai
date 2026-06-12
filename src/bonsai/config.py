@@ -207,6 +207,7 @@ def _service(raw: dict[str, Any]) -> ServiceConfig:
         public=_optional_bool(raw, "public", True),
         primary=_optional_bool(raw, "primary", False),
         url=_optional_str(raw, "url"),
+        start=_optional_str(raw, "start"),
     )
 
 

@@ -781,12 +781,14 @@ def test_execute_tmux_creates_deterministic_session_with_start_env(tmp_path: Pat
 
     new_session = runner.commands[1]
     assert new_session.cwd is None
-    assert new_session.argv[:7] == (
+    assert new_session.argv[:9] == (
         "tmux",
         "new-session",
         "-d",
         "-s",
         plan.session_name,
+        "-n",
+        "services",
         "-c",
         str(feature_worktree),
     )
@@ -794,6 +796,89 @@ def test_execute_tmux_creates_deterministic_session_with_start_env(tmp_path: Pat
     assert "FRONTEND_PORT=4201" in new_session.argv
     assert "BONSAI_BRANCH=feature" in new_session.argv
     assert new_session.argv[-2:] == ("--", "yarn dev")
+    assert [(pane.name, pane.command) for pane in plan.panes] == [("start", "yarn dev")]
+
+
+def test_execute_tmux_creates_service_panes_when_services_define_start_commands(
+    tmp_path: Path,
+) -> None:
+    workspace_root, default_worktree, feature_worktree = _write_exec_workspace(tmp_path)
+    config_text = (
+        VALID_CONFIG.replace(
+            'name = "frontend"\nport_env = "FRONTEND_PORT"',
+            'name = "frontend"\nstart = "yarn web"\nport_env = "FRONTEND_PORT"',
+        )
+        .replace(
+            'name = "api"\nport_env = "API_PORT"',
+            'name = "api"\nstart = "yarn api"\nport_env = "API_PORT"',
+        )
+        .replace('start = "yarn dev"\n', "")
+    )
+    write_config(default_worktree, config_text)
+    (feature_worktree / ".env.local").write_text(
+        "FRONTEND_PORT=4201\nAPI_PORT=3334\n",
+        encoding="utf-8",
+    )
+
+    class TmuxRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[:2] == ["tmux", "has-session"]:
+                return CommandResult(returncode=1)
+            return CommandResult(returncode=0)
+
+    runner = TmuxRunner()
+
+    plan = execute_tmux(runner, workspace_root, "feature", default_worktree)
+
+    assert [(pane.name, pane.command) for pane in plan.panes] == [
+        ("frontend", "yarn web"),
+        ("api", "yarn api"),
+    ]
+    assert [command.argv[:2] for command in runner.commands] == [
+        ("tmux", "has-session"),
+        ("tmux", "new-session"),
+        ("tmux", "split-window"),
+        ("tmux", "select-layout"),
+    ]
+
+    new_session = runner.commands[1]
+    assert new_session.argv[:9] == (
+        "tmux",
+        "new-session",
+        "-d",
+        "-s",
+        plan.session_name,
+        "-n",
+        "services",
+        "-c",
+        str(feature_worktree),
+    )
+    assert "-e" in new_session.argv
+    assert "FRONTEND_PORT=4201" in new_session.argv
+    assert "BONSAI_BRANCH=feature" in new_session.argv
+    assert new_session.argv[-2:] == ("--", "yarn web")
+
+    split_window = runner.commands[2]
+    assert split_window.argv[:7] == (
+        "tmux",
+        "split-window",
+        "-d",
+        "-t",
+        f"{plan.session_name}:0",
+        "-c",
+        str(feature_worktree),
+    )
+    assert "API_PORT=3334" in split_window.argv
+    assert split_window.argv[-2:] == ("--", "yarn api")
+    assert runner.commands[3].argv == (
+        "tmux",
+        "select-layout",
+        "-t",
+        f"{plan.session_name}:0",
+        "tiled",
+    )
 
 
 def test_execute_tmux_reports_existing_session_without_starting(tmp_path: Path) -> None:

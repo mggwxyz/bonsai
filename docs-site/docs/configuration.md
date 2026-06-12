@@ -62,10 +62,18 @@ value = "my-app-${slug}"
 
 [[services]]
 name = "frontend"
+start = "npm run dev:web"
 port_env = "FRONTEND_PORT"
 base_port = 4200
 primary = true
 url = "https://${slug}.my-app.localhost"
+
+[[services]]
+name = "api"
+start = "npm run dev:api"
+port_env = "API_PORT"
+base_port = 3333
+url = "https://api-${slug}.my-app.localhost"
 ```
 
 ## Keys
@@ -160,6 +168,10 @@ values and cannot be overridden by `[[env]]`.
   it is the target of `bonsai open`.
 - `url` — local URL template, for example
   `https://${slug}.my-app.localhost`.
+- `start` — optional service startup command for `bonsai tmux`. When one or
+  more services define `start`, `bonsai tmux` runs those commands in separate
+  panes in one tmux window. This is separate from `[commands].start`, which
+  remains the single-command lifecycle path for `bonsai start` and `bonsai up`.
 
 ### `[caddy]`
 

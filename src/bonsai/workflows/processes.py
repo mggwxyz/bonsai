@@ -26,6 +26,7 @@ from bonsai.models import (
     PortOwner,
     StopProcessItem,
     StopProcessPlan,
+    TmuxPanePlan,
     TmuxSessionPlan,
     WorkspacePort,
     WorktreeCommandResult,
@@ -624,6 +625,23 @@ def _tmux_env_args(env: Mapping[str, str]) -> list[str]:
     return args
 
 
+def _tmux_panes(config: BonsaiConfig) -> tuple[TmuxPanePlan, ...]:
+    service_panes = tuple(
+        TmuxPanePlan(name=service.name, command=service.start)
+        for service in config.services
+        if service.start is not None
+    )
+    if service_panes:
+        return service_panes
+    if config.commands.start is None:
+        raise BonsaiConfigError("Missing config key commands.start")
+    return (TmuxPanePlan(name="start", command=config.commands.start),)
+
+
+def _tmux_shell_command(command: str) -> str:
+    return shlex.join(shlex.split(command))
+
+
 def execute_tmux(
     runner: Runner,
     workspace_root: Path,
@@ -632,8 +650,7 @@ def execute_tmux(
 ) -> TmuxSessionPlan:
     state = load_state(workspace_root / ".bonsai" / "state.json")
     config = load_workspace_config(workspace_root, state)
-    if config.commands.start is None:
-        raise BonsaiConfigError("Missing config key commands.start")
+    panes = _tmux_panes(config)
 
     target = resolve_start_target(workspace_root, name, current_path)
     session_name = _tmux_session_name(state, workspace_root, target)
@@ -654,11 +671,12 @@ def execute_tmux(
             session_name=session_name,
             attach_command=attach_command,
             created=False,
+            panes=panes,
         )
 
     env = _start_environment(config, state, workspace_root, target)
-    start_command = shlex.join(shlex.split(config.commands.start))
     try:
+        first_pane = panes[0]
         runner.run(
             [
                 "tmux",
@@ -666,13 +684,32 @@ def execute_tmux(
                 "-d",
                 "-s",
                 session_name,
+                "-n",
+                "services",
                 "-c",
                 str(target.worktree_path),
                 *_tmux_env_args(env),
                 "--",
-                start_command,
+                _tmux_shell_command(first_pane.command),
             ]
         )
+        for pane in panes[1:]:
+            runner.run(
+                [
+                    "tmux",
+                    "split-window",
+                    "-d",
+                    "-t",
+                    f"{session_name}:0",
+                    "-c",
+                    str(target.worktree_path),
+                    *_tmux_env_args(env),
+                    "--",
+                    _tmux_shell_command(pane.command),
+                ]
+            )
+        if len(panes) > 1:
+            runner.run(["tmux", "select-layout", "-t", f"{session_name}:0", "tiled"])
     except FileNotFoundError as exc:
         raise BonsaiWorkspaceError("tmux is required for bonsai tmux") from exc
 
@@ -682,6 +719,7 @@ def execute_tmux(
         session_name=session_name,
         attach_command=attach_command,
         created=True,
+        panes=panes,
     )
 
 
