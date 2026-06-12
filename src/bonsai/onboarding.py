@@ -247,6 +247,23 @@ def write_starter_config(path: Path, config: StarterConfig) -> Path:
     return path
 
 
+def write_detected_config(
+    config_path: Path,
+    repo_path: Path,
+    fallback_name: str,
+    base_branch: str,
+    force: bool = False,
+) -> Path:
+    if config_path.exists() and not force:
+        raise BonsaiConfigError(f".bonsai.toml already exists at {config_path}")
+    defaults = detect_project_defaults(repo_path, fallback_name, base_branch)
+    config = _starter_from_defaults(defaults)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    path = write_starter_config(config_path, config)
+    load_config(path)
+    return path
+
+
 def prompt_starter_config(
     defaults: ProjectDefaults,
     *,

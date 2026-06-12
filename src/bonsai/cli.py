@@ -30,13 +30,21 @@ from bonsai.command_results import (
 from bonsai.doctor import preflight_report, render_doctor_json
 from bonsai.errors import BonsaiConfigError, BonsaiError, BonsaiWorkspaceError
 from bonsai.git import current_branch
-from bonsai.models import OpenUrlPlan
-from bonsai.onboarding import write_guided_config as onboarding_write_guided_config
+from bonsai.models import ManagedWorktree, OpenUrlPlan
+from bonsai.onboarding import (
+    write_detected_config,
+)
+from bonsai.onboarding import (
+    write_guided_config as onboarding_write_guided_config,
+)
+from bonsai.picker import WorktreeChoice, pick_worktree_branch
 from bonsai.port_repair import render_port_repair_json
 from bonsai.process import SubprocessRunner
 from bonsai.state import load_state
 from bonsai.status import (
+    render_app_processes,
     render_workspace_list,
+    render_workspace_list_all,
     render_workspace_ports,
     render_workspace_status,
     render_workspace_urls,
@@ -44,10 +52,12 @@ from bonsai.status import (
 from bonsai.workflows import (
     check_workspace_health,
     execute_add,
+    execute_add_pull_request,
     execute_checkout,
     execute_cleanup,
     execute_clone,
     execute_doctor_apply,
+    execute_each_command,
     execute_init,
     execute_move,
     execute_port_repairs,
@@ -57,6 +67,9 @@ from bonsai.workflows import (
     execute_stop_processes,
     execute_sync,
     execute_up,
+    execute_worktree_command,
+    plan_all_workspace_summaries,
+    plan_app_processes,
     plan_command_log,
     plan_current_worktree_status,
     plan_open_url,
@@ -123,6 +136,64 @@ if (( $+functions[compdef] )); then
   compdef _bonsai_completion bonsai
 fi
 """
+BASH_SHELL_INIT = """function bonsai() {
+  local bonsai_bin
+  bonsai_bin="$(command -v bonsai)"
+  if [[ -z "$bonsai_bin" ]]; then
+    printf "%s\\n" "bonsai executable not found in PATH" >&2
+    return 127
+  fi
+
+  if [[ "$1" == "checkout" ]]; then
+    shift
+    local checkout_path
+    local bonsai_exit
+    checkout_path="$("$bonsai_bin" checkout --path "$@")"
+    bonsai_exit=$?
+    if [[ $bonsai_exit -ne 0 ]]; then
+      printf "%s\\n" "$checkout_path" >&2
+      return $bonsai_exit
+    fi
+    cd "$checkout_path"
+  else
+    "$bonsai_bin" "$@"
+  fi
+}
+
+_bonsai_completion() {
+  local bonsai_bin
+  bonsai_bin="$(command -v bonsai)"
+  if [[ -z "$bonsai_bin" ]]; then
+    return 1
+  fi
+  eval "$(_BONSAI_COMPLETE=bash_source "$bonsai_bin")"
+}
+
+_bonsai_completion
+"""
+FISH_SHELL_INIT = """function bonsai
+  set -l bonsai_bin (command -s bonsai)
+  if test -z "$bonsai_bin"
+    printf "%s\\n" "bonsai executable not found in PATH" >&2
+    return 127
+  end
+
+  if test "$argv[1]" = "checkout"
+    set -e argv[1]
+    set -l checkout_path ($bonsai_bin checkout --path $argv)
+    set -l bonsai_exit $status
+    if test $bonsai_exit -ne 0
+      printf "%s\\n" "$checkout_path" >&2
+      return $bonsai_exit
+    end
+    cd "$checkout_path"
+  else
+    $bonsai_bin $argv
+  end
+end
+
+_BONSAI_COMPLETE=fish_source bonsai | source
+"""
 SHELL_INTEGRATION_START = "# >>> bonsai shell integration >>>"
 SHELL_INTEGRATION_END = "# <<< bonsai shell integration <<<"
 ZSH_INTEGRATION_BLOCK = (
@@ -130,6 +201,29 @@ ZSH_INTEGRATION_BLOCK = (
     'eval "$(bonsai shell-init zsh)"\n'
     f"{SHELL_INTEGRATION_END}\n"
 )
+BASH_INTEGRATION_BLOCK = (
+    f"{SHELL_INTEGRATION_START}\n"
+    'eval "$(bonsai shell-init bash)"\n'
+    f"{SHELL_INTEGRATION_END}\n"
+)
+
+
+def _shell_integration_path(home: Path, shell: str) -> Path:
+    if shell == "zsh":
+        return home / ".zshrc"
+    if shell == "bash":
+        return home / ".bashrc"
+    if shell == "fish":
+        return home / ".config" / "fish" / "conf.d" / "bonsai.fish"
+    raise BonsaiConfigError(f"Unsupported shell: {shell}")
+
+
+def _shell_integration_block(shell: str) -> str:
+    if shell == "zsh":
+        return ZSH_INTEGRATION_BLOCK
+    if shell == "bash":
+        return BASH_INTEGRATION_BLOCK
+    raise BonsaiConfigError(f"Unsupported shell: {shell}")
 
 
 def ensure_shell_integration(
@@ -138,17 +232,28 @@ def ensure_shell_integration(
     *,
     offer: Callable[[], bool],
 ) -> Literal["installed", "already", "manual"]:
-    """Install zsh integration without raising; never strands a guided run."""
-    if shell != "zsh":
+    """Install shell integration without raising; never strands a guided run."""
+    if shell == "fish":
+        target = _shell_integration_path(home, shell)
+        existing = target.read_text(encoding="utf-8") if target.exists() else ""
+        if existing == FISH_SHELL_INIT:
+            return "already"
+        if not offer():
+            return "manual"
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(FISH_SHELL_INIT, encoding="utf-8")
+        return "installed"
+
+    if shell not in {"zsh", "bash"}:
         return "manual"
-    zshrc = home / ".zshrc"
-    existing = zshrc.read_text(encoding="utf-8") if zshrc.exists() else ""
+    rc_path = _shell_integration_path(home, shell)
+    existing = rc_path.read_text(encoding="utf-8") if rc_path.exists() else ""
     if SHELL_INTEGRATION_START in existing:
         return "already"
     if not offer():
         return "manual"
 
-    backup = home / ".zshrc.bonsai.bak"
+    backup = home / f".{shell}rc.bonsai.bak"
     backup.parent.mkdir(parents=True, exist_ok=True)
     backup.write_text(existing, encoding="utf-8")
 
@@ -157,8 +262,8 @@ def ensure_shell_integration(
         content += "\n"
     if content and not content.endswith("\n\n"):
         content += "\n"
-    content += ZSH_INTEGRATION_BLOCK
-    zshrc.write_text(content, encoding="utf-8")
+    content += _shell_integration_block(shell)
+    rc_path.write_text(content, encoding="utf-8")
     return "installed"
 
 
@@ -251,6 +356,71 @@ def _complete_worktree_names_from_workspace(
         )
     except (BonsaiError, OSError, ValueError, KeyError):
         return []
+
+
+def _worktree_picker_choices(workspace_root: Path) -> tuple[WorktreeChoice, ...]:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    default = WorktreeChoice(
+        branch=state.default_branch,
+        worktree=ManagedWorktree(
+            path=state.default_worktree,
+            slug=state.default_worktree,
+            slot=0,
+        ),
+        path=workspace_root / state.default_worktree,
+        kind="default",
+    )
+    managed = tuple(
+        WorktreeChoice(
+            branch=branch,
+            worktree=worktree,
+            path=workspace_root / worktree.path,
+            kind="managed",
+        )
+        for branch, worktree in sorted(state.worktrees.items(), key=lambda item: item[0].lower())
+    )
+    return (default, *managed)
+
+
+def _is_known_worktree_name(workspace_root: Path, value: str) -> bool:
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    if value in {state.default_branch, state.default_worktree}:
+        return True
+    return any(
+        value in {branch, worktree.path, worktree.slug}
+        for branch, worktree in state.worktrees.items()
+    )
+
+
+def _split_exec_args(workspace_root: Path, args: list[str]) -> tuple[str | None, list[str]]:
+    if not args:
+        return None, []
+    if _is_known_worktree_name(workspace_root, args[0]):
+        return args[0], args[1:]
+    return None, args
+
+
+def _execute_checkout_with_picker_on_ambiguity(
+    runner: SubprocessRunner,
+    name: str,
+    root_path: Path,
+    *,
+    base_branch: str | None,
+):
+    try:
+        if base_branch is None:
+            return execute_checkout(runner, name, root_path)
+        return execute_checkout(runner, name, root_path, base_branch=base_branch)
+    except BonsaiWorkspaceError as exc:
+        if not str(exc).startswith("Ambiguous Bonsai worktree "):
+            raise
+        selected = pick_worktree_branch(
+            _worktree_picker_choices(root_path),
+            include_default=True,
+            query=name,
+            environ=os.environ,
+        )
+        return execute_checkout(runner, selected, root_path)
 
 
 def _resolve_editor_command(environ: Mapping[str, str] | None = None) -> list[str]:
@@ -523,14 +693,16 @@ def start_here(
         offer = typer.confirm if interactive else (lambda: False)
         shell_result = ensure_shell_integration(home, shell, offer=offer)
         if shell_result == "installed":
-            console.print(f"Installed {shell} integration in {home / '.zshrc'}")
+            console.print(
+                f"Installed {shell} integration in {_shell_integration_path(home, shell)}"
+            )
         elif shell_result == "already":
             console.print(f"{shell} integration already installed")
         else:
             console.print(
                 f'Shell integration skipped. Run `bonsai install-shell {shell}`, '
                 'open a new shell, then re-run — or add '
-                'eval "$(bonsai shell-init zsh)" to your shell config.'
+                f'eval "$(bonsai shell-init {shell})" to your shell config.'
             )
 
         worktree_branch = branch or plan.state.default_branch
@@ -603,7 +775,7 @@ def init_command(
             console.print(f"Default worktree: {plan.default_worktree}")
             return
         branch = current_branch(SubprocessRunner(), repo_path)
-        path = write_guided_config(
+        path = write_detected_config(
             config_path=config_path,
             repo_path=repo_path,
             fallback_name=fallback_name,
@@ -618,7 +790,18 @@ def init_command(
 
 @app.command()
 def add(
-    branch: str,
+    branch: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
+    pr_number: Annotated[
+        int | None,
+        typer.Option("--pr", help="Prepare a worktree for a GitHub pull request."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Allow closed or merged pull requests with --pr."),
+    ] = False,
     base_branch: Annotated[
         str | None,
         typer.Option(
@@ -644,12 +827,23 @@ def add(
         current_path = Path.cwd()
         root_path = find_workspace_root(current_path)
         runner = SubprocessRunner()
-        if base_branch is None:
-            plan = execute_add(runner, branch, root_path)
+        read_only = False
+        if pr_number is not None:
+            pr_plan = execute_add_pull_request(runner, pr_number, root_path, force=force)
+            branch = pr_plan.branch
+            plan = pr_plan.add_plan
+            read_only = pr_plan.read_only
         else:
-            plan = execute_add(runner, branch, root_path, base_branch=base_branch)
+            if branch is None:
+                raise BonsaiWorkspaceError("Branch is required unless --pr is provided")
+            if base_branch is None:
+                plan = execute_add(runner, branch, root_path)
+            else:
+                plan = execute_add(runner, branch, root_path, base_branch=base_branch)
         console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print(f"Port slot: {plan.slot}")
+        if read_only:
+            console.print("Pull request is from a fork; prepared branch is read-only.")
         if editor:
             _open_editor(plan.worktree_path)
             console.print(f"Opened editor: {plan.worktree_path}")
@@ -665,7 +859,10 @@ def add(
 
 @app.command("remove")
 def remove_command(
-    name: Annotated[str, typer.Argument(autocompletion=_complete_managed_worktree_names_for_typer)],
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_managed_worktree_names_for_typer),
+    ] = None,
     force: Annotated[
         bool,
         typer.Option("--force", help="Remove a worktree with uncommitted changes."),
@@ -674,6 +871,12 @@ def remove_command(
     """Remove a managed worktree."""
     try:
         root_path = find_workspace_root(Path.cwd())
+        if name is None:
+            name = pick_worktree_branch(
+                _worktree_picker_choices(root_path),
+                include_default=False,
+                environ=os.environ,
+            )
         plan = execute_remove(SubprocessRunner(), name, root_path, force=force)
         if plan.compose_project_name is not None:
             console.print(f"compose down {plan.compose_project_name}")
@@ -713,7 +916,10 @@ def move_command(
 
 @app.command()
 def checkout(
-    name: Annotated[str, typer.Argument(autocompletion=_complete_worktree_names_for_typer)],
+    name: Annotated[
+        str | None,
+        typer.Argument(autocompletion=_complete_worktree_names_for_typer),
+    ] = None,
     path: Annotated[
         bool,
         typer.Option("--path", help="Print the resolved worktree path for shell integration."),
@@ -725,15 +931,44 @@ def checkout(
             help="Base branch to use when creating a new branch worktree.",
         ),
     ] = None,
+    pr_number: Annotated[
+        int | None,
+        typer.Option("--pr", help="Prepare and resolve a GitHub pull request worktree."),
+    ] = None,
+    force: Annotated[
+        bool,
+        typer.Option("--force", help="Allow closed or merged pull requests with --pr."),
+    ] = False,
 ) -> None:
     """Resolve or prepare a worktree for shell checkout."""
     try:
         root_path = find_workspace_root(Path.cwd())
         runner = SubprocessRunner()
-        if base_branch is None:
-            plan = execute_checkout(runner, name, root_path)
-        else:
-            plan = execute_checkout(runner, name, root_path, base_branch=base_branch)
+        if pr_number is not None:
+            pr_plan = execute_add_pull_request(runner, pr_number, root_path, force=force)
+            worktree_path = pr_plan.add_plan.worktree_path
+            if path:
+                typer.echo(str(worktree_path))
+                return
+            if pr_plan.read_only:
+                console.print("Pull request is from a fork; prepared branch is read-only.")
+            console.print(f"Prepared worktree: {worktree_path}")
+            console.print("Shell integration is required for checkout to change directories.")
+            console.print(f"Resolved worktree: {worktree_path}")
+            console.print("Run: bonsai install-shell zsh  # or bash, or fish")
+            raise typer.Exit(code=1)
+        if name is None:
+            name = pick_worktree_branch(
+                _worktree_picker_choices(root_path),
+                include_default=True,
+                environ=os.environ,
+            )
+        plan = _execute_checkout_with_picker_on_ambiguity(
+            runner,
+            name,
+            root_path,
+            base_branch=base_branch,
+        )
         if path:
             typer.echo(str(plan.worktree_path))
             return
@@ -741,7 +976,7 @@ def checkout(
             console.print(f"Prepared worktree: {plan.worktree_path}")
         console.print("Shell integration is required for checkout to change directories.")
         console.print(f"Resolved worktree: {plan.worktree_path}")
-        console.print('Run: eval "$(bonsai shell-init zsh)"')
+        console.print("Run: bonsai install-shell zsh  # or bash, or fish")
         raise typer.Exit(code=1)
     except BonsaiError as exc:
         _fail(exc)
@@ -841,9 +1076,14 @@ def context_command(
 def shell_init(shell: str) -> None:
     """Print shell integration code."""
     try:
-        if shell != "zsh":
+        if shell == "zsh":
+            typer.echo(ZSH_SHELL_INIT, nl=False)
+        elif shell == "bash":
+            typer.echo(BASH_SHELL_INIT, nl=False)
+        elif shell == "fish":
+            typer.echo(FISH_SHELL_INIT, nl=False)
+        else:
             raise BonsaiConfigError(f"Unsupported shell: {shell}")
-        typer.echo(ZSH_SHELL_INIT, nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -852,14 +1092,15 @@ def shell_init(shell: str) -> None:
 def install_shell(shell: str) -> None:
     """Install shell integration for Bonsai checkout."""
     try:
-        if shell != "zsh":
-            raise BonsaiConfigError(f"Unsupported shell: {shell}")
+        _shell_integration_path(Path.home(), shell)
         home = Path.home()
         result = ensure_shell_integration(home, shell, offer=lambda: True)
         if result == "already":
-            console.print("zsh integration already installed")
+            console.print(f"{shell} integration already installed")
         else:
-            console.print(f"Installed zsh integration in {home / '.zshrc'}")
+            console.print(
+                f"Installed {shell} integration in {_shell_integration_path(home, shell)}"
+            )
     except BonsaiError as exc:
         _fail(exc)
 
@@ -870,13 +1111,38 @@ def list_worktrees(
         str,
         typer.Option("--format", help="Output format: text or json."),
     ] = "text",
+    all_workspaces: Annotated[
+        bool,
+        typer.Option("--all", help="List registered workspaces."),
+    ] = False,
 ) -> None:
     """List managed worktrees in the current workspace."""
     try:
+        if all_workspaces:
+            rendered = render_workspace_list_all(
+                plan_all_workspace_summaries(),
+                output_format,
+            )
+            typer.echo(rendered, nl=False)
+            return
         root_path = find_workspace_root(Path.cwd())
         summary = plan_workspace_summary(root_path)
         rendered = render_workspace_list(summary, output_format)
         typer.echo(rendered, nl=False)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("ps")
+def ps_command(
+    output_format: Annotated[
+        str,
+        typer.Option("--format", help="Output format: text or json."),
+    ] = "text",
+) -> None:
+    """List tracked Bonsai app processes across registered workspaces."""
+    try:
+        typer.echo(render_app_processes(plan_app_processes(), output_format), nl=False)
     except BonsaiError as exc:
         _fail(exc)
 
@@ -1048,6 +1314,52 @@ def restart_command(
             return
         exit_code = execute_start(runner, root_path, name, Path.cwd())
         raise typer.Exit(code=exit_code)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("exec", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def exec_command(
+    ctx: typer.Context,
+) -> None:
+    """Run a command in one worktree with its generated environment."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        name, argv = _split_exec_args(root_path, list(ctx.args))
+        result = execute_worktree_command(
+            SubprocessRunner(),
+            root_path,
+            name=name,
+            current_path=Path.cwd(),
+            argv=argv,
+        )
+        console.print(f"{result.branch} exited {result.exit_code}")
+        raise typer.Exit(code=result.exit_code)
+    except BonsaiError as exc:
+        _fail(exc)
+
+
+@app.command("each", context_settings={"allow_extra_args": True, "ignore_unknown_options": True})
+def each_command(
+    ctx: typer.Context,
+    skip_default: Annotated[
+        bool,
+        typer.Option("--skip-default", help="Run only managed worktrees."),
+    ] = False,
+) -> None:
+    """Run a command sequentially across Bonsai worktrees."""
+    try:
+        root_path = find_workspace_root(Path.cwd())
+        result = execute_each_command(
+            SubprocessRunner(),
+            root_path,
+            current_path=Path.cwd(),
+            argv=list(ctx.args),
+            skip_default=skip_default,
+        )
+        for item in result.items:
+            console.print(f"{item.branch}: exited {item.exit_code}")
+        raise typer.Exit(code=result.exit_code)
     except BonsaiError as exc:
         _fail(exc)
 

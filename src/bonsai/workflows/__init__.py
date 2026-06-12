@@ -17,15 +17,19 @@ from bonsai.workflows.maintenance import (
     plan_sync,
 )
 from bonsai.workflows.processes import (
+    execute_each_command,
     execute_start,
     execute_stop_processes,
     execute_up,
+    execute_worktree_command,
+    plan_app_processes,
     plan_command_log,
     plan_stop_processes,
 )
 from bonsai.workflows.shared import (
     ConfigInitializer,
     app_snippets_dir,
+    apply_file_copies,
     apply_symlinks,
     command_summary,
     generated_worktree_env,
@@ -45,6 +49,7 @@ from bonsai.workflows.shared import (
     write_files,
 )
 from bonsai.workflows.views import (
+    plan_all_workspace_summaries,
     plan_current_worktree_status,
     plan_open_url,
     plan_open_url_for_worktree,
@@ -55,6 +60,7 @@ from bonsai.workflows.views import (
 )
 from bonsai.workflows.worktrees import (
     execute_add,
+    execute_add_pull_request,
     execute_checkout,
     execute_cleanup,
     execute_clone,
@@ -73,9 +79,12 @@ __all__ = [
     "_run_caddy_setup",
     "app_snippets_dir",
     "apply_symlinks",
+    "apply_file_copies",
     "check_workspace_health",
     "command_summary",
     "execute_add",
+    "execute_add_pull_request",
+    "execute_each_command",
     "execute_checkout",
     "execute_cleanup",
     "execute_clone",
@@ -89,12 +98,15 @@ __all__ = [
     "execute_start",
     "execute_stop_processes",
     "execute_sync",
+    "execute_worktree_command",
     "execute_up",
     "generated_worktree_env",
     "generated_worktree_files",
     "global_caddy_paths",
     "load_workspace_config",
     "plan_add_files",
+    "plan_all_workspace_summaries",
+    "plan_app_processes",
     "plan_clone_workspace",
     "plan_command_log",
     "plan_current_worktree_status",

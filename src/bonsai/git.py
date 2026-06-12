@@ -55,6 +55,10 @@ def fetch_origin(runner: Runner, repo: Path) -> None:
     runner.run(["git", "-C", str(repo), "fetch", "origin"])
 
 
+def fetch_ref(runner: Runner, repo: Path, refspec: str) -> None:
+    runner.run(["git", "-C", str(repo), "fetch", "origin", refspec])
+
+
 def remote_branch_exists(runner: Runner, repo: Path, branch: str) -> bool:
     result = runner.run(
         ["git", "-C", str(repo), "ls-remote", "--heads", "origin", branch],

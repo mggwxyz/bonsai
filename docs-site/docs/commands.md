@@ -34,12 +34,15 @@ $ bonsai [OPTIONS] COMMAND [ARGS]...
 * `shell-init`: Print shell integration code.
 * `install-shell`: Install shell integration for Bonsai...
 * `list`: List managed worktrees in the current...
+* `ps`: List tracked Bonsai app processes across...
 * `ports`: List configured service ports and listener...
 * `status`
 * `start`: Run the configured start command in a...
 * `up`: Start the configured app command in the...
 * `stop`: Stop listener processes for configured...
 * `restart`: Stop matching listeners, then run the...
+* `exec`: Run a command in one worktree with its...
+* `each`: Run a command sequentially across Bonsai...
 * `logs`
 * `sync`: Compare or repair generated Bonsai files.
 * `repair`
@@ -111,15 +114,17 @@ Prepare a managed worktree for a branch.
 **Usage**:
 
 ```console
-$ bonsai add [OPTIONS] BRANCH
+$ bonsai add [OPTIONS] [BRANCH]
 ```
 
 **Arguments**:
 
-* `BRANCH`: [required]
+* `[BRANCH]`
 
 **Options**:
 
+* `--pr INTEGER`: Prepare a worktree for a GitHub pull request.
+* `--force`: Allow closed or merged pull requests with --pr.
 * `--base-branch TEXT`: Base branch to use when creating a new branch worktree.
 * `--editor`: Open the prepared worktree in an editor.
 * `--open`: Open the prepared worktree&#x27;s primary local URL.
@@ -133,12 +138,12 @@ Remove a managed worktree.
 **Usage**:
 
 ```console
-$ bonsai remove [OPTIONS] NAME
+$ bonsai remove [OPTIONS] [NAME]
 ```
 
 **Arguments**:
 
-* `NAME`: [required]
+* `[NAME]`
 
 **Options**:
 
@@ -177,17 +182,19 @@ Resolve or prepare a worktree for shell checkout.
 **Usage**:
 
 ```console
-$ bonsai checkout [OPTIONS] NAME
+$ bonsai checkout [OPTIONS] [NAME]
 ```
 
 **Arguments**:
 
-* `NAME`: [required]
+* `[NAME]`
 
 **Options**:
 
 * `--path`: Print the resolved worktree path for shell integration.
 * `--base-branch TEXT`: Base branch to use when creating a new branch worktree.
+* `--pr INTEGER`: Prepare and resolve a GitHub pull request worktree.
+* `--force`: Allow closed or merged pull requests with --pr.
 * `--help`: Show this message and exit.
 
 ## `bonsai open`
@@ -291,6 +298,22 @@ List managed worktrees in the current workspace.
 
 ```console
 $ bonsai list [OPTIONS]
+```
+
+**Options**:
+
+* `--format TEXT`: Output format: text or json.  [default: text]
+* `--all`: List registered workspaces.
+* `--help`: Show this message and exit.
+
+## `bonsai ps`
+
+List tracked Bonsai app processes across registered workspaces.
+
+**Usage**:
+
+```console
+$ bonsai ps [OPTIONS]
 ```
 
 **Options**:
@@ -403,6 +426,35 @@ $ bonsai restart [OPTIONS] [NAME]
 * `--force`: Stop external or unknown owners before starting.
 * `--detach`: Start in the background after stopping.
 * `--wait-timeout FLOAT`: Seconds to wait for detached readiness.  [default: 30.0]
+* `--help`: Show this message and exit.
+
+## `bonsai exec`
+
+Run a command in one worktree with its generated environment.
+
+**Usage**:
+
+```console
+$ bonsai exec [OPTIONS]
+```
+
+**Options**:
+
+* `--help`: Show this message and exit.
+
+## `bonsai each`
+
+Run a command sequentially across Bonsai worktrees.
+
+**Usage**:
+
+```console
+$ bonsai each [OPTIONS]
+```
+
+**Options**:
+
+* `--skip-default`: Run only managed worktrees.
 * `--help`: Show this message and exit.
 
 ## `bonsai logs`

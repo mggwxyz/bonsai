@@ -9,6 +9,7 @@ from rich.text import Text
 
 from bonsai.command_results import validate_output_format
 from bonsai.models import (
+    AppProcessPlan,
     UrlCheck,
     WorkspacePort,
     WorkspacePortsPlan,
@@ -25,6 +26,7 @@ LIST_SCHEMA = "bonsai.list.v1"
 STATUS_SCHEMA = "bonsai.status.v1"
 PORTS_SCHEMA = "bonsai.ports.v1"
 URLS_SCHEMA = "bonsai.urls.v1"
+PS_SCHEMA = "bonsai.ps.v1"
 
 
 def _workspace_payload(summary: WorkspaceSummary | WorkspaceStatus) -> dict[str, str]:
@@ -203,6 +205,69 @@ def render_workspace_list(summary: WorkspaceSummary, output_format: str) -> str:
     if output_format == "json":
         return json.dumps(workspace_list_payload(summary), indent=2, sort_keys=True) + "\n"
     return _workspace_list_lines(summary)
+
+
+def render_workspace_list_all(
+    summaries: tuple[WorkspaceSummary, ...],
+    output_format: str,
+) -> str:
+    output_format = validate_output_format(output_format)
+    if output_format == "json":
+        return (
+            json.dumps(
+                {
+                    "schema": "bonsai.list-all.v1",
+                    "workspaces": [workspace_list_payload(summary) for summary in summaries],
+                },
+                indent=2,
+                sort_keys=True,
+            )
+            + "\n"
+        )
+    if not summaries:
+        return "No registered Bonsai workspaces\n"
+    chunks: list[str] = []
+    for summary in summaries:
+        chunks.append(f"Workspace: {summary.workspace_name}\nRoot: {summary.workspace_root}\n")
+        chunks.append(_workspace_list_lines(summary))
+    return "\n".join(chunk.rstrip() for chunk in chunks) + "\n"
+
+
+def app_processes_payload(plan: AppProcessPlan) -> dict[str, Any]:
+    return {
+        "schema": PS_SCHEMA,
+        "processes": [
+            {
+                "workspace": item.workspace_name,
+                "workspace_root": str(item.workspace_root),
+                "branch": item.branch,
+                "worktree_path": str(item.worktree_path),
+                "pid": item.pid,
+                "command": list(item.command),
+                "log_path": str(item.log_path) if item.log_path is not None else None,
+                "started_at": item.started_at,
+            }
+            for item in plan.items
+        ],
+    }
+
+
+def render_app_processes(plan: AppProcessPlan, output_format: str) -> str:
+    output_format = validate_output_format(output_format)
+    if output_format == "json":
+        return json.dumps(app_processes_payload(plan), indent=2, sort_keys=True) + "\n"
+    if not plan.items:
+        return "No tracked Bonsai app processes\n"
+    lines = ["Bonsai processes", ""]
+    for item in plan.items:
+        command = " ".join(item.command)
+        lines.append(f"{item.workspace_name}  {item.branch}  pid={item.pid}  {command}")
+        lines.append(f"  worktree: {item.worktree_path}")
+        if item.log_path is not None:
+            lines.append(f"  log: {item.log_path}")
+        if item.started_at is not None:
+            lines.append(f"  started: {item.started_at}")
+    return "\n".join(lines) + "\n"
 
 
 def render_workspace_ports(

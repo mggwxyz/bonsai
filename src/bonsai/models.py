@@ -19,6 +19,8 @@ class CommandsConfig:
     presetup: str | None = None
     setup: str | None = None
     postsetup: str | None = None
+    postadd: str | None = None
+    preremove: str | None = None
     prestart: str | None = None
     start: str | None = None
     poststart: str | None = None
@@ -53,16 +55,23 @@ class BrowserExtensionConfig:
 
 
 @dataclass(frozen=True)
+class RunConfig:
+    mode: Literal["concurrent", "single"] = "concurrent"
+
+
+@dataclass(frozen=True)
 class BonsaiConfig:
     name: str
     base_branch: str | None
     caddy: CaddyConfig
     commands: CommandsConfig
+    run: RunConfig = field(default_factory=RunConfig)
     browser_extension: BrowserExtensionConfig = field(default_factory=BrowserExtensionConfig)
     shared_files: tuple[SharedFileConfig, ...] = field(default_factory=tuple)
     env: tuple[EnvConfig, ...] = field(default_factory=tuple)
     services: tuple[ServiceConfig, ...] = field(default_factory=tuple)
     path: Path | None = None
+    local_paths: tuple[Path, ...] = field(default_factory=tuple)
 
     def public_services(self) -> tuple[ServiceConfig, ...]:
         return tuple(service for service in self.services if service.public)
@@ -111,6 +120,25 @@ class CommandResult:
     returncode: int
     stdout: str = ""
     stderr: str = ""
+
+
+@dataclass(frozen=True)
+class WorktreeCommandResult:
+    branch: str
+    worktree_path: Path
+    exit_code: int
+
+
+@dataclass(frozen=True)
+class EachCommandResult:
+    items: tuple[WorktreeCommandResult, ...]
+
+    @property
+    def exit_code(self) -> int:
+        for item in self.items:
+            if item.exit_code != 0:
+                return item.exit_code
+        return 0
 
 
 @dataclass(frozen=True)
@@ -237,6 +265,23 @@ class AppDownPlan:
 
 
 @dataclass(frozen=True)
+class AppProcessItem:
+    workspace_name: str
+    workspace_root: Path
+    branch: str
+    worktree_path: Path
+    pid: int
+    command: tuple[str, ...]
+    log_path: Path | None
+    started_at: str | None = None
+
+
+@dataclass(frozen=True)
+class AppProcessPlan:
+    items: tuple[AppProcessItem, ...]
+
+
+@dataclass(frozen=True)
 class FileWrite:
     path: Path
     content: str
@@ -253,10 +298,17 @@ class FileSymlink:
 
 
 @dataclass(frozen=True)
+class FileCopy:
+    source: Path
+    target: Path
+
+
+@dataclass(frozen=True)
 class SyncFileAction:
     kind: str
     path: Path
     content: str | None = None
+    source: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -280,7 +332,19 @@ class AddFilesPlan:
     slot: int
     files: tuple[FileWrite, ...]
     symlinks: tuple[FileSymlink, ...]
+    copies: tuple[FileCopy, ...]
     updated_state: BonsaiState
+
+
+@dataclass(frozen=True)
+class PullRequestWorktreePlan:
+    pr_number: int
+    branch: str
+    title: str
+    url: str | None
+    state: str
+    read_only: bool
+    add_plan: AddFilesPlan
 
 
 @dataclass(frozen=True)

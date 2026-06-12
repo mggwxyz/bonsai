@@ -10,6 +10,7 @@ from bonsai.git import (
 from bonsai.models import (
     CommandResult,
     CommandSpec,
+    FileCopy,
     FileWrite,
     ManagedWorktree,
 )
@@ -17,6 +18,7 @@ from bonsai.ports import allocate_slot
 from bonsai.process import RecordingRunner
 from bonsai.workflows import (
     app_snippets_dir,
+    apply_file_copies,
     global_caddy_paths,
     write_files,
 )
@@ -119,3 +121,21 @@ def test_write_files_creates_parent_directories(tmp_path: Path) -> None:
     write_files((FileWrite(path=tmp_path / "a" / "b.txt", content="hello\n"),))
 
     assert (tmp_path / "a" / "b.txt").read_text(encoding="utf-8") == "hello\n"
+
+
+def test_apply_file_copies_seeds_missing_target_without_overwriting(tmp_path: Path) -> None:
+    source = tmp_path / "main" / ".env"
+    target = tmp_path / "feature" / ".env"
+    source.parent.mkdir()
+    target.parent.mkdir()
+    source.write_text("SECRET=shared\n", encoding="utf-8")
+    target.write_text("SECRET=local\n", encoding="utf-8")
+
+    apply_file_copies((FileCopy(source=source, target=target),))
+
+    assert target.read_text(encoding="utf-8") == "SECRET=local\n"
+
+    target.unlink()
+    apply_file_copies((FileCopy(source=source, target=target),))
+
+    assert target.read_text(encoding="utf-8") == "SECRET=shared\n"

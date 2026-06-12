@@ -61,5 +61,13 @@ def test_build_worktree_facts_projects_env_services_and_summary(tmp_path: Path) 
         "SLOT": "2",
         "PORT": "3002",
         "DB_PORT": "5557",
+        "BONSAI_WORKSPACE_NAME": "authentic",
+        "BONSAI_BRANCH": "MA-123-test",
+        "BONSAI_SLUG": "ma-123-test",
+        "BONSAI_SLOT": "2",
+        "BONSAI_WORKTREE_PATH": str(worktree_path),
+        "BONSAI_ROOT_PATH": str(tmp_path),
+        "BONSAI_DEFAULT_BRANCH": "main",
+        "BONSAI_PRIMARY_URL": "https://ma-123-test.authentic.localhost",
         "DATABASE_URL": "postgres://localhost:5557/ma-123-test",
     }

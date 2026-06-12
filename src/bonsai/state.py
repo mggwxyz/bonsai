@@ -5,11 +5,12 @@ from dataclasses import asdict, replace
 from pathlib import Path
 
 from bonsai.models import BonsaiState, ManagedWorktree
+from bonsai.registry import register_workspace
 
 
 def load_state(path: Path) -> BonsaiState:
     raw = json.loads(path.read_text(encoding="utf-8"))
-    return BonsaiState(
+    state = BonsaiState(
         version=int(raw["version"]),
         name=str(raw["name"]),
         default_branch=str(raw["default_branch"]),
@@ -24,6 +25,9 @@ def load_state(path: Path) -> BonsaiState:
             for branch, data in raw.get("worktrees", {}).items()
         },
     )
+    if path.name == "state.json" and path.parent.name == ".bonsai":
+        register_workspace(path.parent.parent, state)
+    return state
 
 
 def save_state(path: Path, state: BonsaiState) -> None:

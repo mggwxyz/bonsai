@@ -40,18 +40,55 @@ def test_render_template_rejects_malformed_placeholders(template: str) -> None:
 
 def test_render_env_local_contains_slot_ports_and_env(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, VALID_CONFIG))
+    worktree_path = tmp_path / "MB-2036-multi-worktree-port-slots"
     env_text = render_env_local(
         config=config,
         branch="MB-2036-multi-worktree-port-slots",
         slot=2,
-        worktree_path=tmp_path / "MB-2036-multi-worktree-port-slots",
+        worktree_path=worktree_path,
+        workspace_root=tmp_path,
+        default_branch="main",
     )
 
     assert "SLOT=2" in env_text
     assert "FRONTEND_PORT=4202" in env_text
     assert "API_PORT=3335" in env_text
     assert "DB_PORT=5557" in env_text
+    assert "BONSAI_WORKSPACE_NAME=authentic" in env_text
+    assert "BONSAI_BRANCH=MB-2036-multi-worktree-port-slots" in env_text
+    assert "BONSAI_SLUG=mb-2036-multi-worktree-port-slots" in env_text
+    assert "BONSAI_SLOT=2" in env_text
+    assert f"BONSAI_WORKTREE_PATH={worktree_path}" in env_text
+    assert f"BONSAI_ROOT_PATH={tmp_path}" in env_text
+    assert "BONSAI_DEFAULT_BRANCH=main" in env_text
+    assert (
+        "BONSAI_PRIMARY_URL=https://mb-2036-multi-worktree-port-slots.authentic.localhost"
+        in env_text
+    )
     assert "COMPOSE_PROJECT_NAME=authentic-mb-2036-multi-worktree-port-slots" in env_text
+
+
+def test_render_env_local_templates_can_use_bonsai_env_values(tmp_path: Path) -> None:
+    config = load_config(
+        write_config(
+            tmp_path,
+            VALID_CONFIG.replace(
+                'value = "authentic-${slug}"',
+                'value = "${BONSAI_WORKSPACE_NAME}-${BONSAI_BRANCH}-${BONSAI_SLOT}"',
+            ),
+        )
+    )
+
+    env_text = render_env_local(
+        config=config,
+        branch="feature",
+        slot=1,
+        worktree_path=tmp_path / "feature",
+        workspace_root=tmp_path,
+        default_branch="main",
+    )
+
+    assert "COMPOSE_PROJECT_NAME=authentic-feature-1" in env_text
 
 
 def test_render_root_caddyfile_imports_app_dirs(tmp_path: Path) -> None:
@@ -83,7 +120,7 @@ def test_render_caddy_snippets_only_public_services(tmp_path: Path) -> None:
 def test_template_values_reject_service_port_env_collisions(tmp_path: Path) -> None:
     config = load_config(write_config(tmp_path, VALID_CONFIG.replace("FRONTEND_PORT", "slug", 1)))
 
-    with pytest.raises(ValueError, match="reserved template key: slug"):
+    with pytest.raises(ValueError, match="reserved environment name: slug"):
         render_env_local(
             config=config,
             branch="MB-2036-multi-worktree-port-slots",

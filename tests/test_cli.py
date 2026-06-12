@@ -22,6 +22,7 @@ from bonsai.models import (
     CaddySetupResult,
     DoctorCheck,
     DoctorReport,
+    EachCommandResult,
     ManagedWorktree,
     OpenUrlPlan,
     PortOwner,
@@ -30,7 +31,9 @@ from bonsai.models import (
     PortRepairServiceChange,
     StopProcessItem,
     StopProcessPlan,
+    WorktreeCommandResult,
 )
+from bonsai.rendering import render_env_local
 from bonsai.state import save_state
 
 runner = CliRunner()
@@ -94,6 +97,341 @@ def test_help_lists_core_commands() -> None:
 
     repair_help = runner.invoke(cli.app, ["repair", "--help"])
     assert repair_help.exit_code == 0
+
+
+def test_checkout_without_name_uses_picker_for_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+    monkeypatch.setattr(cli, "pick_worktree_branch", lambda *args, **kwargs: "MA-123-test")
+
+    result = runner.invoke(cli.app, ["checkout", "--path"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{workspace / 'ma-123-test'}\n"
+
+
+def test_checkout_ambiguous_name_uses_picker_query(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "authentic"
+    (workspace / "main").mkdir(parents=True)
+    (workspace / "ma-123-auth").mkdir()
+    (workspace / "ma-124-api").mkdir()
+    save_state(
+        workspace / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@example.com:org/repo.git",
+            worktrees={
+                "MA-123-auth": ManagedWorktree(
+                    path="ma-123-auth",
+                    slug="ma-123-auth",
+                    slot=1,
+                ),
+                "MA-124-api": ManagedWorktree(
+                    path="ma-124-api",
+                    slug="ma-124-api",
+                    slot=2,
+                ),
+            },
+        ),
+    )
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_pick(*args, **kwargs):
+        assert kwargs["query"] == "MA-12"
+        return "MA-124-api"
+
+    monkeypatch.setattr(cli, "pick_worktree_branch", fake_pick)
+
+    result = runner.invoke(cli.app, ["checkout", "--path", "MA-12"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{workspace / 'ma-124-api'}\n"
+
+
+def test_remove_without_name_uses_picker(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+    monkeypatch.setattr(cli, "pick_worktree_branch", lambda *args, **kwargs: "MA-123-test")
+
+    def fake_execute_remove(_runner, name: str, root_path: Path, force: bool = False):
+        calls.append((name, root_path, force))
+        return SimpleNamespace(worktree_path=root_path / "ma-123-test", compose_project_name=None)
+
+    monkeypatch.setattr(cli, "execute_remove", fake_execute_remove, raising=False)
+
+    result = runner.invoke(cli.app, ["remove"])
+
+    assert result.exit_code == 0
+    assert calls == [("MA-123-test", workspace, False)]
+    assert "Removed worktree" in result.stdout
+
+
+def test_shell_init_supports_bash_and_fish() -> None:
+    bash = runner.invoke(cli.app, ["shell-init", "bash"])
+    fish = runner.invoke(cli.app, ["shell-init", "fish"])
+
+    assert bash.exit_code == 0
+    assert "function bonsai()" in bash.stdout
+    assert "_BONSAI_COMPLETE=bash_source" in bash.stdout
+    assert fish.exit_code == 0
+    assert "function bonsai" in fish.stdout
+    assert "_BONSAI_COMPLETE=fish_source" in fish.stdout
+
+
+def test_install_shell_supports_bash_and_fish(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    monkeypatch.setenv("HOME", str(tmp_path))
+
+    bash = runner.invoke(cli.app, ["install-shell", "bash"])
+    fish = runner.invoke(cli.app, ["install-shell", "fish"])
+
+    assert bash.exit_code == 0
+    assert (tmp_path / ".bashrc").exists()
+    assert (tmp_path / ".bashrc.bonsai.bak").exists()
+    assert fish.exit_code == 0
+    assert (tmp_path / ".config" / "fish" / "conf.d" / "bonsai.fish").exists()
+
+
+def test_exec_command_forwards_worktree_and_command(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_execute_worktree_command(_runner, root_path, name, current_path, argv):
+        calls.append((root_path, name, current_path, argv))
+        return WorktreeCommandResult(
+            branch=name or "main",
+            worktree_path=root_path / (name or "main"),
+            exit_code=7,
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "execute_worktree_command",
+        fake_execute_worktree_command,
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["exec", "MA-123-test", "--", "echo", "hi"])
+
+    assert result.exit_code == 7
+    assert calls == [(workspace, "MA-123-test", workspace / "main", ["echo", "hi"])]
+    assert "MA-123-test exited 7" in result.stdout
+
+
+def test_add_pr_uses_pull_request_workflow(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_execute_add_pull_request(_runner, pr_number, root_path, *, force=False):
+        calls.append((pr_number, root_path, force))
+        return SimpleNamespace(
+            branch="bonsai/pr-12",
+            read_only=True,
+            add_plan=SimpleNamespace(worktree_path=root_path / "bonsai-pr-12", slot=2),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "execute_add_pull_request",
+        fake_execute_add_pull_request,
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["add", "--pr", "12", "--force"])
+
+    assert result.exit_code == 0
+    assert calls == [(12, workspace, True)]
+    assert "Prepared worktree" in result.stdout
+    assert "read-only" in result.stdout
+
+
+def test_checkout_pr_prints_prepared_path(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_execute_add_pull_request(_runner, pr_number, root_path, *, force=False):
+        assert pr_number == 7
+        assert force is False
+        return SimpleNamespace(
+            branch="feature",
+            read_only=False,
+            add_plan=SimpleNamespace(worktree_path=root_path / "feature", slot=1),
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "execute_add_pull_request",
+        fake_execute_add_pull_request,
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["checkout", "--pr", "7", "--path"])
+
+    assert result.exit_code == 0
+    assert result.stdout == f"{workspace / 'feature'}\n"
+
+
+def test_exec_command_can_target_current_worktree(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_execute_worktree_command(_runner, _root_path, name, current_path, argv):
+        _ = current_path
+        calls.append((name, argv))
+        return WorktreeCommandResult(
+            branch="main",
+            worktree_path=workspace / "main",
+            exit_code=0,
+        )
+
+    monkeypatch.setattr(
+        cli,
+        "execute_worktree_command",
+        fake_execute_worktree_command,
+        raising=False,
+    )
+
+    result = runner.invoke(cli.app, ["exec", "--", "pwd"])
+
+    assert result.exit_code == 0
+    assert calls == [(None, ["pwd"])]
+
+
+def test_each_command_forwards_command_and_returns_first_failure(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_execute_each_command(_runner, root_path, current_path, argv, *, skip_default=False):
+        calls.append((root_path, current_path, argv, skip_default))
+        return EachCommandResult(
+            items=(
+                WorktreeCommandResult("main", root_path / "main", 0),
+                WorktreeCommandResult("MA-123-test", root_path / "ma-123-test", 3),
+            )
+        )
+
+    monkeypatch.setattr(cli, "execute_each_command", fake_execute_each_command, raising=False)
+
+    result = runner.invoke(cli.app, ["each", "--skip-default", "--", "git", "status"])
+
+    assert result.exit_code == 3
+    assert calls == [(workspace, workspace / "main", ["git", "status"], True)]
+    assert "main" in result.stdout
+    assert "MA-123-test" in result.stdout
+
+
+def test_list_all_renders_registered_workspaces(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    calls = []
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_plan_all_workspace_summaries():
+        calls.append("all")
+        return (
+            SimpleNamespace(
+                workspace_name="one",
+                workspace_root=tmp_path / "one",
+                default_branch="main",
+                default_worktree="main",
+                config_path=tmp_path / "one" / ".bonsai.toml",
+                worktrees=(),
+                commands={},
+            ),
+            SimpleNamespace(
+                workspace_name="two",
+                workspace_root=tmp_path / "two",
+                default_branch="main",
+                default_worktree="main",
+                config_path=tmp_path / "two" / ".bonsai.toml",
+                worktrees=(),
+                commands={},
+            ),
+        )
+
+    monkeypatch.setattr(cli, "plan_all_workspace_summaries", fake_plan_all_workspace_summaries)
+
+    result = runner.invoke(cli.app, ["list", "--all"])
+
+    assert result.exit_code == 0
+    assert calls == ["all"]
+    assert "one" in result.stdout
+    assert "two" in result.stdout
+
+
+def test_ps_renders_global_processes(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    workspace = tmp_path / "authentic"
+    write_checkout_workspace(workspace)
+    monkeypatch.chdir(workspace / "main")
+
+    def fake_plan_app_processes():
+        return SimpleNamespace(
+            items=(
+                SimpleNamespace(
+                    workspace_name="authentic",
+                    workspace_root=workspace,
+                    branch="MA-123-test",
+                    worktree_path=workspace / "ma-123-test",
+                    pid=123,
+                    command=("npm", "run", "dev"),
+                    log_path=workspace / ".bonsai" / "logs" / "app.log",
+                    started_at="2026-06-11T12:00:00Z",
+                ),
+            )
+        )
+
+    monkeypatch.setattr(cli, "plan_app_processes", fake_plan_app_processes)
+
+    result = runner.invoke(cli.app, ["ps"])
+
+    assert result.exit_code == 0
+    assert "authentic" in result.stdout
+    assert "MA-123-test" in result.stdout
+    assert "123" in result.stdout
 
 
 def test_agent_guide_command_is_not_exposed() -> None:
@@ -188,7 +526,7 @@ def test_clone_reports_workflow_errors(monkeypatch) -> None:
     assert "Error: Target workspace already exists" in result.stdout
 
 
-def test_init_writes_guided_config(monkeypatch) -> None:
+def test_init_writes_detected_config(monkeypatch) -> None:
     calls = []
 
     class FakeRunner:
@@ -198,20 +536,20 @@ def test_init_writes_guided_config(monkeypatch) -> None:
         calls.append(("branch", runner, repo))
         return "main"
 
-    def fake_write_guided_config(
+    def fake_write_detected_config(
         config_path: Path,
         repo_path: Path,
         fallback_name: str,
         base_branch: str,
         force: bool = False,
     ) -> Path:
-        calls.append(("write", config_path, repo_path, fallback_name, base_branch, force))
+        calls.append(("detected", config_path, repo_path, fallback_name, base_branch, force))
         config_path.write_text('name = "repo"\n', encoding="utf-8")
         return config_path
 
     monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
     monkeypatch.setattr(cli, "current_branch", fake_current_branch, raising=False)
-    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+    monkeypatch.setattr(cli, "write_detected_config", fake_write_detected_config, raising=False)
 
     with runner.isolated_filesystem():
         repo = Path.cwd()
@@ -221,11 +559,50 @@ def test_init_writes_guided_config(monkeypatch) -> None:
     assert calls[0][0] == "branch"
     assert isinstance(calls[0][1], FakeRunner)
     assert calls[0][2] == repo
-    assert calls[1] == ("write", repo / ".bonsai.toml", repo, repo.name, "main", False)
+    assert calls[1] == ("detected", repo / ".bonsai.toml", repo, repo.name, "main", False)
     assert "Created" in result.stdout
 
 
-def test_init_writes_guided_config_to_workspace_root_when_managed(
+def test_init_writes_detected_config_without_guided_prompt(monkeypatch) -> None:
+    calls = []
+
+    class FakeRunner:
+        pass
+
+    def fake_current_branch(runner, repo: Path) -> str:
+        calls.append(("branch", runner, repo))
+        return "main"
+
+    def fake_write_detected_config(
+        config_path: Path,
+        repo_path: Path,
+        fallback_name: str,
+        base_branch: str,
+        force: bool = False,
+    ) -> Path:
+        calls.append(("detected", config_path, repo_path, fallback_name, base_branch, force))
+        config_path.write_text('name = "repo"\n', encoding="utf-8")
+        return config_path
+
+    def fail_guided_config(*_args, **_kwargs):
+        raise AssertionError("init should not use the guided prompt writer")
+
+    monkeypatch.setattr(cli, "SubprocessRunner", FakeRunner, raising=False)
+    monkeypatch.setattr(cli, "current_branch", fake_current_branch, raising=False)
+    monkeypatch.setattr(cli, "write_detected_config", fake_write_detected_config, raising=False)
+    monkeypatch.setattr(cli, "write_guided_config", fail_guided_config, raising=False)
+
+    with runner.isolated_filesystem():
+        repo = Path.cwd()
+        result = runner.invoke(cli.app, ["init"])
+
+    assert result.exit_code == 0
+    assert calls[0][0] == "branch"
+    assert isinstance(calls[0][1], FakeRunner)
+    assert calls[1] == ("detected", repo / ".bonsai.toml", repo, repo.name, "main", False)
+
+
+def test_init_writes_detected_config_to_workspace_root_when_managed(
     monkeypatch,
     tmp_path: Path,
 ) -> None:
@@ -248,24 +625,24 @@ def test_init_writes_guided_config_to_workspace_root_when_managed(
     monkeypatch.chdir(default_worktree)
     monkeypatch.setattr(cli, "current_branch", lambda _runner, _repo: "main", raising=False)
 
-    def fake_write_guided_config(
+    def fake_write_detected_config(
         config_path: Path,
         repo_path: Path,
         fallback_name: str,
         base_branch: str,
         force: bool = False,
     ) -> Path:
-        calls.append(("write", config_path, repo_path, fallback_name, base_branch, force))
+        calls.append(("detected", config_path, repo_path, fallback_name, base_branch, force))
         config_path.write_text('name = "repo"\n', encoding="utf-8")
         return config_path
 
-    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+    monkeypatch.setattr(cli, "write_detected_config", fake_write_detected_config, raising=False)
 
     result = runner.invoke(cli.app, ["init"])
 
     assert result.exit_code == 0
     assert calls == [
-        ("write", workspace_root / ".bonsai.toml", default_worktree, "authentic", "main", False)
+        ("detected", workspace_root / ".bonsai.toml", default_worktree, "authentic", "main", False)
     ]
 
 
@@ -296,7 +673,7 @@ def test_init_from_workspace_root_uses_default_worktree_for_project_detection(
         branch_calls.append(repo)
         return "main"
 
-    def fake_write_guided_config(
+    def fake_write_detected_config(
         config_path: Path,
         repo_path: Path,
         fallback_name: str,
@@ -308,7 +685,7 @@ def test_init_from_workspace_root_uses_default_worktree_for_project_detection(
         return config_path
 
     monkeypatch.setattr(cli, "current_branch", fake_current_branch, raising=False)
-    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+    monkeypatch.setattr(cli, "write_detected_config", fake_write_detected_config, raising=False)
 
     result = runner.invoke(cli.app, ["init"])
 
@@ -324,7 +701,7 @@ def test_init_force_allows_existing_config(monkeypatch) -> None:
 
     monkeypatch.setattr(cli, "current_branch", lambda _runner, _repo: "main", raising=False)
 
-    def fake_write_guided_config(
+    def fake_write_detected_config(
         config_path: Path,
         repo_path: Path,
         fallback_name: str,
@@ -335,7 +712,7 @@ def test_init_force_allows_existing_config(monkeypatch) -> None:
         calls.append(force)
         return config_path
 
-    monkeypatch.setattr(cli, "write_guided_config", fake_write_guided_config, raising=False)
+    monkeypatch.setattr(cli, "write_detected_config", fake_write_detected_config, raising=False)
 
     result = runner.invoke(cli.app, ["init", "--force"])
 
@@ -1499,11 +1876,14 @@ url = "https://${slug}.authentic.localhost"
     )
     env_path = tmp_path / "ma-123-test" / ".env.local"
     env_path.write_text(
-        "# Generated by bonsai. Do not edit by hand.\n"
-        "SLOT=1\n"
-        "FRONTEND_PORT=4201\n"
-        "\n"
-        "COMPOSE_PROJECT_NAME=authentic-ma-123-test\n",
+        render_env_local(
+            load_config(config_path),
+            "MA-123-test",
+            1,
+            tmp_path / "ma-123-test",
+            workspace_root=tmp_path,
+            default_branch="main",
+        ),
         encoding="utf-8",
     )
     monkeypatch.chdir(tmp_path / "ma-123-test")
@@ -1518,6 +1898,8 @@ url = "https://${slug}.authentic.localhost"
     assert payload["current"]["slot"] == 1
     assert payload["current"]["env_file"]["status"] == "current"
     assert payload["generated_env"]["FRONTEND_PORT"] == "4201"
+    assert payload["generated_env"]["BONSAI_BRANCH"] == "MA-123-test"
+    assert payload["generated_env"]["BONSAI_ROOT_PATH"] == str(tmp_path)
     assert payload["generated_env"]["COMPOSE_PROJECT_NAME"] == "authentic-ma-123-test"
     assert payload["commands"]["start"] == "bonsai start"
     assert payload["commands"]["open"] == "bonsai open"
@@ -1738,23 +2120,27 @@ def test_ensure_shell_integration_declined_makes_no_changes(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("shell", ["fish", "bash"])
-def test_ensure_shell_integration_non_zsh_returns_manual_without_raising(
+def test_ensure_shell_integration_installs_bash_and_fish(
     tmp_path: Path, shell: str
 ) -> None:
     result = cli.ensure_shell_integration(tmp_path, shell, offer=lambda: True)
 
-    assert result == "manual"
-    assert not (tmp_path / ".zshrc").exists()
-    assert list(tmp_path.glob(".zshrc.bonsai*.bak")) == []
+    assert result == "installed"
+    if shell == "bash":
+        assert (tmp_path / ".bashrc").exists()
+        assert (tmp_path / ".bashrc.bonsai.bak").exists()
+    else:
+        assert (tmp_path / ".config" / "fish" / "conf.d" / "bonsai.fish").exists()
 
 
-def test_install_shell_non_zsh_still_raises(monkeypatch, tmp_path: Path) -> None:
+def test_install_shell_supports_fish(monkeypatch, tmp_path: Path) -> None:
     monkeypatch.setattr(cli.Path, "home", lambda: tmp_path)
 
     result = runner.invoke(cli.app, ["install-shell", "fish"])
 
-    assert result.exit_code == 1
-    assert "Unsupported shell: fish" in result.stdout
+    assert result.exit_code == 0
+    assert "Installed fish integration" in result.stdout
+    assert (tmp_path / ".config" / "fish" / "conf.d" / "bonsai.fish").exists()
 
 
 def test_ensure_shell_integration_preserves_trailing_newline(tmp_path: Path) -> None:

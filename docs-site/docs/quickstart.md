@@ -33,14 +33,14 @@ the review screen:
 
 - **Project identity** — workspace name and base branch
 - **Lifecycle commands** — install, setup, and start commands
-- **Shared files** — whether `.env` is symlinked into each worktree
+- **Shared files** — whether `.env` is symlinked or copied into each worktree
 - **Primary service** — service name, port environment variable, base port,
   and local URL template
 
-**Shell integration offer** — asked once per machine. Accepting appends
-`eval "$(bonsai shell-init zsh)"` to `~/.zshrc`. After that you need to
-open a new shell (or `source ~/.zshrc`) before `bonsai checkout <branch>`
-can cd into a worktree.
+**Shell integration offer** — asked once per machine. Accepting installs the
+checkout wrapper for your selected shell (`zsh`, `bash`, or `fish`). After that
+you need to open a new shell (or source the updated shell config) before
+`bonsai checkout <branch>` can cd into a worktree.
 
 ### What Success Looks Like
 
@@ -55,8 +55,8 @@ both are expected and work fine.
 ### If Something's Missing
 
 - **git not found** — `brew install git`, then re-run `bonsai start-here`
-- **Shell integration skipped** — `bonsai install-shell zsh`, open a new
-  shell, then `bonsai checkout <branch>` to cd in
+- **Shell integration skipped** — `bonsai install-shell zsh` (or `bash` or
+  `fish`), open a new shell, then `bonsai checkout <branch>` to cd in
 - **App not up yet** — `bonsai up <branch>` to start it in the background,
   then `bonsai open <branch>` to open the URL
 
@@ -98,7 +98,14 @@ bonsai checkout ma-123-implement-auth
 per machine:
 
 ```bash
-bonsai install-shell zsh
+bonsai install-shell zsh   # or bash, or fish
+```
+
+You can also prepare a GitHub pull request directly:
+
+```bash
+bonsai add --pr 123
+bonsai checkout --pr 123
 ```
 
 Start the configured dev command and open the app:
@@ -110,7 +117,7 @@ bonsai open
 
 ## Where to Go Next
 
-- [Worktrees](worktrees.md) — add, checkout, remove, move, and PR-aware cleanup
-- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, logs
+- [Worktrees](worktrees.md) — add, checkout, remove, move, PR worktrees, and PR-aware cleanup
+- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, exec, each, logs
 - [Ports & URLs](urls-and-ports.md) — port slots, Caddy routing, open, urls, ports
-- [Workspace Views](workspace-views.md) — list, status, and agent context
+- [Workspace Views](workspace-views.md) — list, list --all, ps, status, and agent context

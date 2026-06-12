@@ -91,22 +91,31 @@ Run:
 bonsai stop
 bonsai stop ma-123-implement-auth
 bonsai restart ma-123-implement-auth
+bonsai ps
 ```
 
-`stop` first terminates the worktree's tracked background process from `bonsai up`, then terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching processes for every worktree.
+`stop` first terminates the worktree's tracked background process from `bonsai up`, then terminates listener processes on the selected worktree's configured service ports when ownership can be matched to that worktree by process cwd. External or unknown owners are skipped unless `--force` is passed. Use `bonsai stop --all` to stop matching processes for every worktree. Use `bonsai ps` to inspect tracked app processes across registered workspaces.
 
 ## Checkout Does Not Change Directories
 
 Install shell integration and open a new shell:
 
 ```bash
-bonsai install-shell zsh
+bonsai install-shell zsh   # or bash, or fish
 ```
 
 If you prefer manual setup:
 
 ```zsh
 eval "$(bonsai shell-init zsh)"
+```
+
+```bash
+eval "$(bonsai shell-init bash)"
+```
+
+```fish
+bonsai shell-init fish | source
 ```
 
 ## Local URL Is Missing Or Stale
@@ -164,18 +173,19 @@ bonsai start ma-123-implement-auth
 
 ## Find Lifecycle Command Output
 
-Bonsai logs configured install, setup, and start commands under `.bonsai/logs/<worktree-slug>/`.
+Bonsai logs configured lifecycle commands and hooks under `.bonsai/logs/<worktree-slug>/`.
 
 ```bash
 bonsai logs
 bonsai logs ma-123-implement-auth --command install
 bonsai logs ma-123-implement-auth --command setup
+bonsai logs ma-123-implement-auth --command postadd
 bonsai logs ma-123-implement-auth --command start
 ```
 
 ## Cleanup Skips A Worktree
 
-`bonsai cleanup` is conservative. It skips branches with no PR, open PRs, unmerged closed PRs, or uncommitted changes.
+`bonsai cleanup` is conservative. It skips branches with no PR, open PRs, unmerged closed PRs, or uncommitted changes. It also understands fork PR worktrees created by `bonsai add --pr <number>` as `bonsai/pr-<number>`.
 
 Preview cleanup:
 

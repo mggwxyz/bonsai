@@ -30,6 +30,7 @@ from bonsai.workflows import (
     execute_doctor_apply,
     execute_move,
     execute_port_repairs,
+    execute_remove,
     execute_rename_default,
     execute_repair,
     execute_sync,
@@ -98,6 +99,17 @@ class RealGitHermeticCaddyRunner(RecordingRunner):
                 raise BonsaiCommandError(result.stderr)
             return result
         return CommandResult(returncode=0)
+
+
+def _init_git_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def _caddy_setup_config(tmp_path: Path) -> object:
@@ -198,6 +210,82 @@ def test_plan_sync_reports_missing_and_stale_generated_files(tmp_path: Path) -> 
     assert ("write", snippets / "main-frontend.caddy") in caddy_actions
     assert ("write", snippets / "feature-frontend.caddy") in caddy_actions
     assert plan.reload_caddy is True
+
+
+def test_sync_copy_mode_repairs_missing_copy_without_overwriting_existing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    feature_worktree.mkdir()
+    config_text = VALID_CONFIG.replace('mode = "symlink"', 'mode = "copy"')
+    write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=shared\n", encoding="utf-8")
+    (feature_worktree / ".env").write_text("SECRET=local\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_sync(workspace_root)
+
+    copy_actions = {(action.kind, action.path) for action in plan.actions}
+    assert ("copy", default_worktree / ".env") not in copy_actions
+    assert ("copy", feature_worktree / ".env") not in copy_actions
+
+    (feature_worktree / ".env").unlink()
+    plan = execute_sync(RecordingRunner(), workspace_root, apply=True)
+
+    copy_actions = {(action.kind, action.path) for action in plan.actions}
+    assert ("copy", feature_worktree / ".env") in copy_actions
+    assert (feature_worktree / ".env").read_text(encoding="utf-8") == "SECRET=shared\n"
+
+
+def test_sync_worktreeinclude_repairs_missing_copy_without_overwriting_existing(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    feature_worktree = workspace_root / "feature"
+    _init_git_repo(default_worktree)
+    feature_worktree.mkdir()
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".gitignore").write_text(".env.shared\n", encoding="utf-8")
+    (default_worktree / ".worktreeinclude").write_text(".env.shared\n", encoding="utf-8")
+    (default_worktree / ".env.shared").write_text("SECRET=shared\n", encoding="utf-8")
+    (feature_worktree / ".env.shared").write_text("SECRET=local\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    plan = plan_sync(workspace_root)
+
+    copy_actions = {(action.kind, action.path) for action in plan.actions}
+    assert ("copy", feature_worktree / ".env.shared") not in copy_actions
+
+    (feature_worktree / ".env.shared").unlink()
+    plan = execute_sync(RecordingRunner(), workspace_root, apply=True)
+
+    copy_actions = {(action.kind, action.path) for action in plan.actions}
+    assert ("copy", feature_worktree / ".env.shared") in copy_actions
+    assert (feature_worktree / ".env.shared").read_text(encoding="utf-8") == "SECRET=shared\n"
 
 
 def test_plan_sync_removes_stale_configured_service_snippets(tmp_path: Path) -> None:
@@ -1528,6 +1616,104 @@ def test_execute_add_repairs_existing_worktree_path_without_git_add(tmp_path: Pa
     assert runner.commands[-2].cwd == branch_worktree
     assert runner.commands[-1].argv == ("yarn", "setup")
     assert runner.commands[-1].cwd == branch_worktree
+    setup_env = dict(runner.commands[-1].env)
+    assert setup_env["BONSAI_BRANCH"] == "feature"
+    assert setup_env["BONSAI_WORKTREE_PATH"] == str(branch_worktree)
+    assert setup_env["BONSAI_ROOT_PATH"] == str(workspace_root)
+    assert setup_env["BONSAI_DEFAULT_BRANCH"] == "main"
+    assert setup_env["BONSAI_PRIMARY_URL"] == "https://feature.authentic.localhost"
+
+
+def test_execute_add_passes_generated_env_to_postadd(tmp_path: Path) -> None:
+    class ExistingWorktreeRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[-2:] == ["rev-parse", "--is-inside-work-tree"]:
+                return CommandResult(returncode=0, stdout="true\n")
+            if argv[-3:] == ["rev-parse", "--abbrev-ref", "HEAD"]:
+                return CommandResult(returncode=0, stdout="feature\n")
+            return CommandResult(returncode=0)
+
+    runner = ExistingWorktreeRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        'setup = "yarn setup"',
+        'setup = "yarn setup"\npostadd = "echo postadd"',
+    )
+    write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    postadd = runner.commands[-1]
+    assert postadd.argv == ("echo", "postadd")
+    assert postadd.cwd == branch_worktree
+    postadd_env = dict(postadd.env)
+    assert postadd_env["BONSAI_BRANCH"] == "feature"
+    assert postadd_env["BONSAI_SLOT"] == "1"
+    assert postadd_env["BONSAI_WORKTREE_PATH"] == str(branch_worktree)
+    assert postadd_env["BONSAI_ROOT_PATH"] == str(workspace_root)
+    assert postadd_env["BONSAI_PRIMARY_URL"] == "https://feature.authentic.localhost"
+
+
+def test_execute_remove_passes_bonsai_env_to_preremove(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir()
+    config_text = VALID_CONFIG.replace(
+        'setup = "yarn setup"',
+        'setup = "yarn setup"\npreremove = "echo preremove"',
+    )
+    write_config(default_worktree, config_text)
+    (branch_worktree / ".env.local").write_text("FRONTEND_PORT=4201\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    execute_remove(runner, "feature", workspace_root, force=True)
+
+    preremove = runner.commands[0]
+    assert preremove.argv == ("echo", "preremove")
+    assert preremove.cwd == branch_worktree
+    preremove_env = dict(preremove.env)
+    assert preremove_env["FRONTEND_PORT"] == "4201"
+    assert preremove_env["BONSAI_BRANCH"] == "feature"
+    assert preremove_env["BONSAI_WORKTREE_PATH"] == str(branch_worktree)
+    assert preremove_env["BONSAI_ROOT_PATH"] == str(workspace_root)
+    assert preremove_env["BONSAI_PRIMARY_URL"] == "https://feature.authentic.localhost"
 
 
 def test_execute_move_uses_git_move_updates_state_and_syncs_generated_files(

@@ -16,8 +16,9 @@ Use Bonsai when you often need to switch between feature branches, test several 
 - Managed worktrees for feature branches.
 - Generated `.env.local` values for branch-specific ports and names.
 - Optional Caddy snippets for local HTTPS URLs.
-- Configured install, setup, and start commands with managed lifecycle logs.
-- Rich and JSON workspace summaries for humans, scripts, and AI agents.
+- Configured lifecycle commands and hooks with managed logs.
+- Interactive shell checkout, PR worktrees, and ad hoc command execution per worktree or across all worktrees.
+- Rich and JSON workspace, process, and global workspace summaries for humans, scripts, and AI agents.
 - State repair, generated-file sync, workspace diagnostics, PR-aware cleanup, and Compose teardown during removal.
 
 ## Core Workflow
@@ -25,6 +26,7 @@ Use Bonsai when you often need to switch between feature branches, test several 
 ```bash
 bonsai clone git@github.com:org/my-app.git my-app
 bonsai add ma-123-implement-auth
+# or: bonsai add --pr 123
 bonsai checkout ma-123-implement-auth
 bonsai start
 bonsai logs --command start
@@ -38,9 +40,9 @@ bonsai open
 
 - [Install](install.md) and the [Quickstart](quickstart.md) — from zero to a running app.
 - [Configuration](configuration.md) — everything `.bonsai.toml` controls.
-- [Worktrees](worktrees.md) — add, checkout, remove, move, and PR-aware cleanup.
-- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, and logs.
+- [Worktrees](worktrees.md) — add, checkout, remove, move, PR worktrees, and PR-aware cleanup.
+- [Running Apps](running-apps.md) — foreground start, background up/down, stop, restart, exec, each, and logs.
 - [Ports & URLs](urls-and-ports.md) — port slots, machine-global Caddy routing, open, urls, and ports.
-- [Workspace Views](workspace-views.md) — list, status, and agent context output.
+- [Workspace Views](workspace-views.md) — list, list --all, ps, status, and agent context output.
 - [Command Reference](commands.md) — every command and option, generated from the CLI.
 - [Troubleshooting](troubleshooting.md) — doctor, repair, and common symptoms.

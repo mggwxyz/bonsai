@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -10,6 +11,7 @@ from bonsai.compose import (
     teardown_compose_project,
 )
 from bonsai.config import load_config
+from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiWorkspaceError
 from bonsai.git import (
     add_existing_worktree,
@@ -18,6 +20,7 @@ from bonsai.git import (
     current_branch,
     discover_default_branch,
     fetch_origin,
+    fetch_ref,
     is_git_worktree,
     list_worktrees,
     remote_branch_exists,
@@ -40,13 +43,16 @@ from bonsai.models import (
     CleanupItem,
     CleanupPlan,
     CloneWorkspacePlan,
+    FileCopy,
     FileSymlink,
     ManagedWorktree,
     MoveWorktreePlan,
+    PullRequestWorktreePlan,
     RemoveWorktreePlan,
 )
 from bonsai.ports import allocate_slot
 from bonsai.process import Runner
+from bonsai.rendering import standard_bonsai_env
 from bonsai.slug import branch_slug
 from bonsai.state import load_state, remove_worktree, save_state, update_worktree
 from bonsai.workflows.caddy_ops import (
@@ -59,6 +65,7 @@ from bonsai.workflows.processes import (
     execute_stop_processes,
 )
 from bonsai.workflows.shared import (
+    _POST_ADD_COMMAND_KINDS,
     _PREPARE_COMMAND_KINDS,
     ConfigInitializer,
     _configured_worktree_targets,
@@ -66,6 +73,7 @@ from bonsai.workflows.shared import (
     _fuzzy_worktree_target,
     _safe_path_segment,
     app_snippets_dir,
+    apply_file_copies,
     apply_symlinks,
     generated_worktree_env,
     generated_worktree_files,
@@ -74,7 +82,10 @@ from bonsai.workflows.shared import (
     resolve_managed_worktree,
     resolve_workspace_config_path,
     run_configured_lifecycle_commands,
+    run_lifecycle_command,
     workspace_config_path,
+    workspace_local_config_paths,
+    worktreeinclude_file_copies,
     write_files,
 )
 
@@ -83,6 +94,15 @@ from bonsai.workflows.shared import (
 class _PullRequestInfo:
     state: str
     merged_at: str | None
+    url: str | None
+
+
+@dataclass(frozen=True)
+class _PullRequestView:
+    head_ref_name: str
+    is_cross_repository: bool
+    state: str
+    title: str
     url: str | None
 
 
@@ -109,6 +129,8 @@ def plan_clone_workspace(
         branch=default_branch,
         slot=0,
         worktree_path=default_worktree,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
     )
     return CloneWorkspacePlan(
         workspace_root=workspace_root,
@@ -136,17 +158,37 @@ def plan_add_files(
         slot = existing_worktree.slot
     worktree_path = workspace_root / slug
     default_worktree_path = workspace_root / state.default_worktree
-    files = list(generated_worktree_files(config, branch, slot, worktree_path))
+    files = list(
+        generated_worktree_files(
+            config,
+            branch,
+            slot,
+            worktree_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+        )
+    )
     symlinks: list[FileSymlink] = []
+    copies: list[FileCopy] = []
     for shared_file in config.shared_files:
         source = _safe_path_segment(shared_file.source, "shared file source")
         target = _safe_path_segment(shared_file.target, "shared file target")
-        symlinks.append(
-            FileSymlink(
-                source=default_worktree_path / source,
-                target=worktree_path / target,
+        if shared_file.mode == "copy":
+            copies.append(
+                FileCopy(
+                    source=default_worktree_path / source,
+                    target=worktree_path / target,
+                )
             )
-        )
+        else:
+            symlinks.append(
+                FileSymlink(
+                    source=default_worktree_path / source,
+                    target=worktree_path / target,
+                )
+            )
+
+    copies.extend(worktreeinclude_file_copies(config, default_worktree_path, worktree_path))
 
     updated_state = update_worktree(
         state,
@@ -159,6 +201,7 @@ def plan_add_files(
         slot=slot,
         files=tuple(files),
         symlinks=tuple(symlinks),
+        copies=tuple(copies),
         updated_state=updated_state,
     )
 
@@ -291,18 +334,18 @@ def _github_cli_error(message: str) -> BonsaiWorkspaceError:
     return BonsaiWorkspaceError(f"{message}. Install gh if needed, then run: gh auth login")
 
 
-def _require_github_cli(runner: Runner, repo: Path) -> None:
+def _require_github_cli(runner: Runner, repo: Path, purpose: str = "cleanup") -> None:
     try:
         version = runner.run(["gh", "--version"], check=False)
     except FileNotFoundError as exc:
-        raise _github_cli_error("GitHub CLI is required for cleanup") from exc
+        raise _github_cli_error(f"GitHub CLI is required for {purpose}") from exc
     if version.returncode != 0:
-        raise _github_cli_error("GitHub CLI is required for cleanup")
+        raise _github_cli_error(f"GitHub CLI is required for {purpose}")
 
     try:
         auth = runner.run(["gh", "auth", "status"], cwd=repo, check=False)
     except FileNotFoundError as exc:
-        raise _github_cli_error("GitHub CLI is required for cleanup") from exc
+        raise _github_cli_error(f"GitHub CLI is required for {purpose}") from exc
     if auth.returncode != 0:
         raise BonsaiWorkspaceError("GitHub CLI is not authenticated. Run: gh auth login")
 
@@ -348,6 +391,89 @@ def _github_prs_for_branch(runner: Runner, repo: Path, branch: str) -> tuple[_Pu
     return tuple(pull_requests)
 
 
+_FORK_PR_BRANCH_PATTERN = re.compile(r"^bonsai/pr-(?P<number>\d+)$")
+
+
+def _github_pr_for_number(
+    runner: Runner,
+    repo: Path,
+    pr_number: int,
+) -> tuple[_PullRequestInfo, ...]:
+    result = runner.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "state,mergedAt,url",
+        ],
+        cwd=repo,
+    )
+    try:
+        raw_item = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data: {pr_number}") from exc
+    if not isinstance(raw_item, dict):
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data: {pr_number}")
+    state = raw_item.get("state")
+    merged_at = raw_item.get("mergedAt")
+    url = raw_item.get("url")
+    return (
+        _PullRequestInfo(
+            state=str(state or "").lower(),
+            merged_at=str(merged_at) if merged_at else None,
+            url=str(url) if url else None,
+        ),
+    )
+
+
+def _github_prs_for_cleanup_branch(
+    runner: Runner,
+    repo: Path,
+    branch: str,
+) -> tuple[_PullRequestInfo, ...]:
+    match = _FORK_PR_BRANCH_PATTERN.fullmatch(branch)
+    if match is not None:
+        return _github_pr_for_number(runner, repo, int(match.group("number")))
+    return _github_prs_for_branch(runner, repo, branch)
+
+
+def _github_pr_view(runner: Runner, repo: Path, pr_number: int) -> _PullRequestView:
+    _require_github_cli(runner, repo, purpose="PR worktrees")
+    result = runner.run(
+        [
+            "gh",
+            "pr",
+            "view",
+            str(pr_number),
+            "--json",
+            "headRefName,isCrossRepository,state,title,url",
+        ],
+        cwd=repo,
+    )
+    try:
+        raw = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data: {pr_number}") from exc
+    if not isinstance(raw, dict):
+        raise BonsaiWorkspaceError(f"Unable to parse GitHub PR data: {pr_number}")
+    head_ref_name = raw.get("headRefName")
+    if not isinstance(head_ref_name, str) or not head_ref_name:
+        raise BonsaiWorkspaceError(f"GitHub PR {pr_number} has no head branch")
+    is_cross_repository = bool(raw.get("isCrossRepository"))
+    state = str(raw.get("state") or "").lower()
+    title = str(raw.get("title") or "")
+    url = raw.get("url")
+    return _PullRequestView(
+        head_ref_name=head_ref_name,
+        is_cross_repository=is_cross_repository,
+        state=state,
+        title=title,
+        url=str(url) if url else None,
+    )
+
+
 def _pr_cleanup_decision(
     runner: Runner,
     default_worktree: Path,
@@ -356,7 +482,7 @@ def _pr_cleanup_decision(
     workspace_root: Path,
 ) -> CleanupItem:
     worktree_path = workspace_root / worktree.path
-    pull_requests = _github_prs_for_branch(runner, default_worktree, branch)
+    pull_requests = _github_prs_for_cleanup_branch(runner, default_worktree, branch)
     if not pull_requests:
         return CleanupItem(branch, worktree_path, "skip", "no pull request found")
 
@@ -408,7 +534,11 @@ def execute_clone(
     fallback_config = repo_config_path(workspace_root, default_branch)
     if not root_config.exists() and not fallback_config.exists() and config_initializer is not None:
         config_initializer(root_config, safe_name, default_branch, default_worktree)
-    config = load_config(resolve_workspace_config_path(workspace_root, default_branch))
+    config_path = resolve_workspace_config_path(workspace_root, default_branch)
+    config = load_config(
+        config_path,
+        local_paths=workspace_local_config_paths(workspace_root, default_branch, config_path),
+    )
     plan = plan_clone_workspace(git_url, safe_name, default_branch, config, parent)
     write_files(plan.files)
     save_state(workspace_root / ".bonsai" / "state.json", plan.state)
@@ -442,8 +572,11 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
             )
     else:
         config_path = checkout_path / ".bonsai.toml"
-        config = load_config(config_path)
         default_worktree = _safe_path_segment(checkout_path.name, "default worktree")
+        config = load_config(
+            config_path,
+            local_paths=workspace_local_config_paths(workspace_root, default_worktree, config_path),
+        )
         default_branch = current_branch(runner, checkout_path)
         if not default_branch or default_branch == "HEAD":
             raise BonsaiWorkspaceError(f"Unable to determine current branch for {checkout_path}")
@@ -495,6 +628,8 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
             branch=default_branch,
             slot=0,
             worktree_path=checkout_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
         )
     )
     for branch, worktree in adopted_worktrees.items():
@@ -504,6 +639,8 @@ def execute_init(runner: Runner, checkout_path: Path) -> CloneWorkspacePlan:
                 branch=branch,
                 slot=worktree.slot,
                 worktree_path=workspace_root / worktree.path,
+                workspace_root=workspace_root,
+                default_branch=state.default_branch,
             )
         )
     plan = CloneWorkspacePlan(
@@ -553,7 +690,28 @@ def execute_add(
                 plan.worktree_path,
                 creation_base_branch,
             )
+    _finalize_add(
+        runner,
+        config=config,
+        state_path=state_path,
+        workspace_root=workspace_root,
+        branch=branch,
+        plan=plan,
+    )
+    return plan
+
+
+def _finalize_add(
+    runner: Runner,
+    *,
+    config: BonsaiConfig,
+    state_path: Path,
+    workspace_root: Path,
+    branch: str,
+    plan: AddFilesPlan,
+) -> None:
     apply_symlinks(plan.symlinks)
+    apply_file_copies(plan.copies)
     write_files(plan.files)
     save_state(state_path, plan.updated_state)
     reload_workspace_caddy(runner)
@@ -568,7 +726,104 @@ def execute_add(
         cwd=plan.worktree_path,
         env=command_env,
     )
-    return plan
+    run_configured_lifecycle_commands(
+        runner,
+        config=config,
+        workspace_root=workspace_root,
+        worktree_slug=worktree_slug,
+        kinds=_POST_ADD_COMMAND_KINDS,
+        cwd=plan.worktree_path,
+        env=command_env,
+    )
+
+
+def execute_add_pull_request(
+    runner: Runner,
+    pr_number: int,
+    workspace_root: Path,
+    *,
+    force: bool = False,
+) -> PullRequestWorktreePlan:
+    state_path = workspace_root / ".bonsai" / "state.json"
+    state = load_state(state_path)
+    default_worktree = workspace_root / state.default_worktree
+    pr = _github_pr_view(runner, default_worktree, pr_number)
+    if pr.state not in {"open"} and not force:
+        raise BonsaiWorkspaceError(f"Pull request {pr_number} is {pr.state}; requires --force")
+
+    if not pr.is_cross_repository:
+        add_plan = execute_add(runner, pr.head_ref_name, workspace_root)
+        return PullRequestWorktreePlan(
+            pr_number=pr_number,
+            branch=pr.head_ref_name,
+            title=pr.title,
+            url=pr.url,
+            state=pr.state,
+            read_only=False,
+            add_plan=add_plan,
+        )
+
+    branch = f"bonsai/pr-{pr_number}"
+    config = load_workspace_config(workspace_root, state)
+    plan = plan_add_files(config, state, workspace_root, branch)
+    if plan.worktree_path.exists() and not plan.worktree_path.is_dir():
+        raise BonsaiWorkspaceError(f"Branch worktree path is not a directory: {plan.worktree_path}")
+    fetch_ref(runner, default_worktree, f"pull/{pr_number}/head:{branch}")
+    if plan.worktree_path.exists():
+        if not is_git_worktree(runner, plan.worktree_path):
+            raise BonsaiWorkspaceError(
+                f"Branch worktree path is not a git worktree: {plan.worktree_path}"
+            )
+        existing_branch = current_branch(runner, plan.worktree_path)
+        if existing_branch != branch:
+            raise BonsaiWorkspaceError(
+                f"Branch worktree path has branch {existing_branch}, expected {branch}"
+            )
+    else:
+        add_existing_worktree(runner, default_worktree, branch, plan.worktree_path)
+    _finalize_add(
+        runner,
+        config=config,
+        state_path=state_path,
+        workspace_root=workspace_root,
+        branch=branch,
+        plan=plan,
+    )
+    return PullRequestWorktreePlan(
+        pr_number=pr_number,
+        branch=branch,
+        title=pr.title,
+        url=pr.url,
+        state=pr.state,
+        read_only=True,
+        add_plan=plan,
+    )
+
+
+def _worktree_env(
+    config: BonsaiConfig,
+    state: BonsaiState,
+    workspace_root: Path,
+    branch: str,
+    worktree: ManagedWorktree,
+    worktree_path: Path,
+) -> dict[str, str]:
+    env_path = worktree_path / ".env.local"
+    if not env_path.exists():
+        env: dict[str, str] = {}
+    else:
+        env = parse_env_content(env_path.read_text(encoding="utf-8"))
+    env.update(
+        standard_bonsai_env(
+            config,
+            branch,
+            worktree.slot,
+            worktree_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+        )
+    )
+    return env
 
 
 def execute_checkout(
@@ -626,6 +881,25 @@ def execute_remove(
     if not force and worktree_has_changes(runner, worktree_path):
         raise BonsaiWorkspaceError(
             f"Worktree has uncommitted changes: {worktree_path}. Use --force to remove it."
+        )
+
+    if config.commands.preremove:
+        run_lifecycle_command(
+            runner,
+            workspace_root=workspace_root,
+            worktree_slug=resolved.worktree.slug,
+            kind="preremove",
+            command=config.commands.preremove,
+            cwd=worktree_path,
+            env=_worktree_env(
+                config,
+                state,
+                workspace_root,
+                resolved.branch,
+                resolved.worktree,
+                worktree_path,
+            ),
+            check=not force,
         )
 
     execute_stop_processes(

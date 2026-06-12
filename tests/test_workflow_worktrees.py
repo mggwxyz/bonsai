@@ -1,4 +1,5 @@
 import re
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 
@@ -15,6 +16,7 @@ from bonsai.models import (
     BonsaiState,
     CommandResult,
     CommandSpec,
+    FileCopy,
     ManagedWorktree,
     SharedFileConfig,
 )
@@ -23,6 +25,7 @@ from bonsai.state import load_state, save_state
 from bonsai.workflows import (
     app_snippets_dir,
     execute_add,
+    execute_add_pull_request,
     execute_checkout,
     execute_cleanup,
     execute_clone,
@@ -38,6 +41,17 @@ from bonsai.workflows import (
     worktree_name_completions,
 )
 from bonsai.workflows import worktrees as wf_worktrees
+
+
+def _init_git_repo(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    subprocess.run(
+        ["git", "init"],
+        cwd=path,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
 
 
 def test_remove_worktree_passes_force_when_requested() -> None:
@@ -136,6 +150,127 @@ def test_plan_add_files_renders_env_caddy_and_state(tmp_path: Path) -> None:
     assert plan.symlinks[0].target == (
         tmp_path / "authentic" / "mb-2036-multi-worktree-port-slots" / ".env"
     )
+
+
+def test_plan_add_files_plans_copy_mode_shared_files(tmp_path: Path) -> None:
+    config = replace(
+        load_config(write_config(tmp_path, VALID_CONFIG)),
+        shared_files=(SharedFileConfig(source=".env", target=".env", mode="copy"),),
+    )
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    plan = plan_add_files(config, state, tmp_path / "authentic", "feature")
+
+    assert plan.symlinks == ()
+    assert plan.copies == (
+        FileCopy(
+            source=tmp_path / "authentic" / "main" / ".env",
+            target=tmp_path / "authentic" / "feature" / ".env",
+        ),
+    )
+
+
+def test_plan_add_files_plans_worktreeinclude_gitignored_file_copies(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    _init_git_repo(default_worktree)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".gitignore").write_text(
+        ".env.shared\nconfig/local/\nnode_modules/\ndist/\n",
+        encoding="utf-8",
+    )
+    (default_worktree / ".worktreeinclude").write_text(
+        ".env.shared\nconfig/local/**\n!config/local/skip.json\nREADME.md\nmissing.local\n"
+        "node_modules/**\ndist/**\n",
+        encoding="utf-8",
+    )
+    (default_worktree / ".env.shared").write_text("SECRET=shared\n", encoding="utf-8")
+    (default_worktree / "README.md").write_text("tracked docs are not copied\n", encoding="utf-8")
+    subprocess.run(
+        ["git", "add", "README.md"],
+        cwd=default_worktree,
+        check=True,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+    (default_worktree / "config" / "local").mkdir(parents=True)
+    (default_worktree / "config" / "local" / "settings.json").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+    (default_worktree / "config" / "local" / "skip.json").write_text(
+        "{}\n",
+        encoding="utf-8",
+    )
+    (default_worktree / "node_modules").mkdir()
+    (default_worktree / "node_modules" / "package.json").write_text("{}\n", encoding="utf-8")
+    (default_worktree / "dist").mkdir()
+    (default_worktree / "dist" / "bundle.js").write_text("build output\n", encoding="utf-8")
+    config = load_config(default_worktree / ".bonsai.toml")
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    plan = plan_add_files(config, state, workspace_root, "feature")
+
+    copied_paths = {
+        copy.source.relative_to(default_worktree).as_posix()
+        for copy in plan.copies
+    }
+    assert copied_paths == {
+        ".env.shared",
+        "config/local/settings.json",
+    }
+    assert {
+        copy.target.relative_to(workspace_root / "feature").as_posix()
+        for copy in plan.copies
+    } == copied_paths
+
+
+def test_plan_add_files_explicit_shared_files_win_over_worktreeinclude(
+    tmp_path: Path,
+) -> None:
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    _init_git_repo(default_worktree)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".gitignore").write_text(".env.shared\n", encoding="utf-8")
+    (default_worktree / ".worktreeinclude").write_text(".env.shared\n", encoding="utf-8")
+    (default_worktree / ".env.shared").write_text("SECRET=shared\n", encoding="utf-8")
+    config = replace(
+        load_config(default_worktree / ".bonsai.toml"),
+        shared_files=(
+            SharedFileConfig(source=".env.shared", target=".env.shared", mode="symlink"),
+        ),
+    )
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={},
+    )
+
+    plan = plan_add_files(config, state, workspace_root, "feature")
+
+    assert plan.copies == ()
+    assert plan.symlinks[0].source == default_worktree / ".env.shared"
+    assert plan.symlinks[0].target == workspace_root / "feature" / ".env.shared"
 
 
 def test_plan_move_worktree_updates_state_path_preserving_slug_and_slot(
@@ -1566,6 +1701,169 @@ def test_execute_add_can_override_base_branch_for_new_branch(tmp_path: Path) -> 
     )
 
 
+def test_execute_add_pull_request_uses_same_repo_branch(tmp_path: Path) -> None:
+    class PullRequestRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:3] == ["gh", "pr", "view"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        '{"headRefName":"feature","isCrossRepository":false,'
+                        '"state":"OPEN","title":"Feature","url":"https://example.test/pr/7"}'
+                    ),
+                )
+            if argv[:6] == ["git", "-C", str(default_worktree), "ls-remote", "--heads", "origin"]:
+                return CommandResult(returncode=0, stdout="abc\trefs/heads/feature\n")
+            return CommandResult(returncode=0)
+
+    runner = PullRequestRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    result = execute_add_pull_request(runner, 7, workspace_root)
+
+    assert result.branch == "feature"
+    assert result.read_only is False
+    assert result.add_plan.worktree_path == workspace_root / "feature"
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "add",
+            str(workspace_root / "feature"),
+            "feature",
+        )
+    ) in runner.commands
+
+
+def test_execute_add_pull_request_fetches_fork_branch(tmp_path: Path) -> None:
+    class ForkPullRequestRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:3] == ["gh", "pr", "view"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        '{"headRefName":"feature","isCrossRepository":true,'
+                        '"state":"OPEN","title":"Feature","url":"https://example.test/pr/12"}'
+                    ),
+                )
+            return CommandResult(returncode=0)
+
+    runner = ForkPullRequestRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    result = execute_add_pull_request(runner, 12, workspace_root)
+
+    assert result.branch == "bonsai/pr-12"
+    assert result.read_only is True
+    assert CommandSpec(
+        argv=("git", "-C", str(default_worktree), "fetch", "origin", "pull/12/head:bonsai/pr-12")
+    ) in runner.commands
+    assert CommandSpec(
+        argv=(
+            "git",
+            "-C",
+            str(default_worktree),
+            "worktree",
+            "add",
+            str(workspace_root / "bonsai-pr-12"),
+            "bonsai/pr-12",
+        )
+    ) in runner.commands
+
+
+def test_execute_add_pull_request_requires_force_for_closed_pr(tmp_path: Path) -> None:
+    class ClosedPullRequestRunner(RecordingRunner):
+        def run(self, argv, cwd=None, check=True, env=None):
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:3] == ["gh", "pr", "view"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        '{"headRefName":"feature","isCrossRepository":false,'
+                        '"state":"CLOSED","title":"Feature","url":"https://example.test/pr/9"}'
+                    ),
+                )
+            if argv[:6] == ["git", "-C", str(default_worktree), "ls-remote", "--heads", "origin"]:
+                return CommandResult(returncode=0, stdout="abc\trefs/heads/feature\n")
+            return CommandResult(returncode=0)
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    write_config(default_worktree, VALID_CONFIG)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    runner = ClosedPullRequestRunner()
+    with pytest.raises(BonsaiWorkspaceError, match="requires --force"):
+        execute_add_pull_request(runner, 9, workspace_root)
+    assert all("worktree" not in command.argv for command in runner.commands)
+
+    forced = ClosedPullRequestRunner()
+    result = execute_add_pull_request(forced, 9, workspace_root, force=True)
+
+    assert result.branch == "feature"
+
+
 def test_execute_add_runs_setup_after_install(tmp_path: Path) -> None:
     runner = RecordingRunner()
     workspace_root = tmp_path / "authentic"
@@ -1694,6 +1992,51 @@ def test_execute_add_runs_pre_and_post_commands_with_generated_worktree_env(
         assert command_env["DB_PORT"] == "5556"
 
 
+def test_execute_add_runs_postadd_after_prepare_commands(tmp_path: Path) -> None:
+    runner = RecordingRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    default_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'install = "yarn install"',
+                'setup = "yarn setup"',
+                'postadd = "echo postadd"',
+                'start = "yarn dev"',
+            ]
+        ),
+    )
+    write_config(default_worktree, config_text)
+    (default_worktree / ".env").write_text("SECRET=value\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={},
+        ),
+    )
+
+    execute_add(runner, "feature", workspace_root)
+
+    assert [command.argv for command in runner.commands[-3:]] == [
+        ("yarn", "install"),
+        ("yarn", "setup"),
+        ("echo", "postadd"),
+    ]
+    postadd = runner.commands[-1]
+    assert postadd.cwd == workspace_root / "feature"
+    assert postadd.log_path is not None
+    assert postadd.log_path.name.endswith("-postadd.log")
+    assert dict(postadd.env)["FRONTEND_PORT"] == "4201"
+
+
 def test_execute_add_logs_install_and_setup_under_managed_worktree_slug(
     tmp_path: Path,
 ) -> None:
@@ -1793,8 +2136,148 @@ def test_execute_remove_removes_clean_worktree_snippets_and_state(tmp_path: Path
             str(branch_worktree),
         )
     ) in runner.commands
-    assert runner.commands[-1] == CommandSpec(
-        argv=("caddy", "reload", "--config", str(global_caddy_paths()[0]))
+
+
+def test_execute_remove_runs_preremove_before_teardown(tmp_path: Path) -> None:
+    class CleanRemoveRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+    runner = CleanRemoveRunner()
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'install = "yarn install"',
+                'setup = "yarn setup"',
+                'preremove = "echo preremove"',
+                'start = "yarn dev"',
+            ]
+        ),
+    )
+    write_config(default_worktree, config_text)
+    (branch_worktree / ".env.local").write_text("FRONTEND_PORT=4201\n", encoding="utf-8")
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+        ),
+    )
+
+    execute_remove(runner, "feature", workspace_root)
+
+    preremove_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command.argv == ("echo", "preremove")
+    )
+    git_remove_index = next(
+        index
+        for index, command in enumerate(runner.commands)
+        if command.argv[:5] == ("git", "-C", str(default_worktree), "worktree", "remove")
+    )
+    assert preremove_index < git_remove_index
+    assert runner.commands[preremove_index].cwd == branch_worktree
+    assert dict(runner.commands[preremove_index].env)["FRONTEND_PORT"] == "4201"
+
+
+def test_execute_remove_preremove_failure_aborts_unless_forced(tmp_path: Path) -> None:
+    class FailingPreremoveRunner(RecordingRunner):
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+            env=None,
+        ) -> CommandResult:
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env))
+            if argv[-2:] == ["status", "--porcelain"]:
+                return CommandResult(returncode=0, stdout="")
+            return CommandResult(returncode=0)
+
+        def run_stream_logged(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            env=None,
+            log_path: Path | None = None,
+            label: str | None = None,
+        ) -> int:
+            _ = label
+            recorded_env = tuple(sorted(env.items())) if env is not None else ()
+            self.commands.append(
+                CommandSpec(argv=tuple(argv), cwd=cwd, env=recorded_env, log_path=log_path)
+            )
+            if log_path is not None:
+                log_path.parent.mkdir(parents=True, exist_ok=True)
+                log_path.write_text("", encoding="utf-8")
+            return 17 if argv == ["false"] else 0
+
+    workspace_root = tmp_path / "authentic"
+    default_worktree = workspace_root / "main"
+    branch_worktree = workspace_root / "feature"
+    default_worktree.mkdir(parents=True)
+    branch_worktree.mkdir(parents=True)
+    config_text = VALID_CONFIG.replace(
+        '[commands]\ninstall = "yarn install"\nsetup = "yarn setup"\nstart = "yarn dev"',
+        "\n".join(
+            [
+                "[commands]",
+                'install = "yarn install"',
+                'setup = "yarn setup"',
+                'preremove = "false"',
+                'start = "yarn dev"',
+            ]
+        ),
+    )
+    write_config(default_worktree, config_text)
+    (branch_worktree / ".env.local").write_text("FRONTEND_PORT=4201\n", encoding="utf-8")
+    state = BonsaiState(
+        version=1,
+        name="authentic",
+        default_branch="main",
+        default_worktree="main",
+        repo_url="git@github.com:org/authentic.git",
+        worktrees={"feature": ManagedWorktree(path="feature", slug="feature", slot=1)},
+    )
+    save_state(workspace_root / ".bonsai" / "state.json", state)
+
+    runner = FailingPreremoveRunner()
+    with pytest.raises(BonsaiCommandError, match="Command failed \\(17\\)"):
+        execute_remove(runner, "feature", workspace_root)
+    assert all(
+        command.argv[:5] != ("git", "-C", str(default_worktree), "worktree", "remove")
+        for command in runner.commands
+    )
+
+    save_state(workspace_root / ".bonsai" / "state.json", state)
+    forced_runner = FailingPreremoveRunner()
+    execute_remove(forced_runner, "feature", workspace_root, force=True)
+    assert any(
+        command.argv[:5] == ("git", "-C", str(default_worktree), "worktree", "remove")
+        for command in forced_runner.commands
     )
 
 
@@ -2251,6 +2734,60 @@ def test_execute_cleanup_dry_run_marks_merged_prs_and_skips_others(tmp_path: Pat
         "missing",
     }
     assert all(command.argv[:2] != ("docker", "compose") for command in runner.commands)
+
+
+def test_execute_cleanup_recognizes_fork_pr_branch_names(tmp_path: Path) -> None:
+    class ForkCleanupRunner:
+        def __init__(self) -> None:
+            self.commands: list[CommandSpec] = []
+
+        def run(
+            self,
+            argv: list[str],
+            cwd: Path | None = None,
+            check: bool = True,
+        ) -> CommandResult:
+            self.commands.append(CommandSpec(argv=tuple(argv), cwd=cwd))
+            if argv == ["gh", "--version"]:
+                return CommandResult(returncode=0, stdout="gh version 2.0.0\n")
+            if argv == ["gh", "auth", "status"]:
+                return CommandResult(returncode=0)
+            if argv[:4] == ["gh", "pr", "view", "12"]:
+                return CommandResult(
+                    returncode=0,
+                    stdout=(
+                        '{"state":"MERGED","mergedAt":"2026-06-11T12:00:00Z",'
+                        '"url":"https://github.com/org/repo/pull/12"}'
+                    ),
+                )
+            return CommandResult(returncode=0)
+
+    runner = ForkCleanupRunner()
+    workspace_root = tmp_path / "authentic"
+    (workspace_root / "main").mkdir(parents=True)
+    save_state(
+        workspace_root / ".bonsai" / "state.json",
+        BonsaiState(
+            version=1,
+            name="authentic",
+            default_branch="main",
+            default_worktree="main",
+            repo_url="git@github.com:org/authentic.git",
+            worktrees={
+                "bonsai/pr-12": ManagedWorktree(
+                    path="bonsai-pr-12",
+                    slug="bonsai-pr-12",
+                    slot=1,
+                )
+            },
+        ),
+    )
+
+    plan = execute_cleanup(runner, workspace_root)
+
+    assert [(item.branch, item.action, item.reason, item.pr_url) for item in plan.items] == [
+        ("bonsai/pr-12", "remove", "pull request is merged", "https://github.com/org/repo/pull/12")
+    ]
 
 
 def test_execute_cleanup_skips_dirty_merged_prs_without_force(tmp_path: Path) -> None:

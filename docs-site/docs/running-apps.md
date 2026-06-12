@@ -5,15 +5,15 @@ title: Running Apps
 # Running Apps
 
 Bonsai runs the lifecycle commands configured in `.bonsai.toml` — `install`,
-`setup`, and `start`, plus optional `pre*` and `post*` hooks — from the
-target worktree, with the generated `.env.local` values available in the
-subprocess environment.
+`setup`, `postadd`, `preremove`, and `start`, plus optional `pre*` and `post*`
+hooks for install, setup, and start — from the target worktree, with the
+generated `.env.local` values available in the subprocess environment.
 
 Output streams live and is saved as timestamped logs under
 `.bonsai/logs/<worktree-slug>/`. Log kinds are `preinstall`, `install`,
-`postinstall`, `presetup`, `setup`, `postsetup`, `prestart`, `start`, and
-`poststart`; when multiple runs share a timestamp, Bonsai suffixes and
-orders the log files consistently.
+`postinstall`, `presetup`, `setup`, `postsetup`, `postadd`, `preremove`,
+`prestart`, `start`, and `poststart`; when multiple runs share a timestamp,
+Bonsai suffixes and orders the log files consistently.
 
 ## Start in the Foreground
 
@@ -47,6 +47,16 @@ with `--wait-timeout`). If the app does not become ready in time, Bonsai
 stops the process and reports the log path. If the worktree is already
 running, `up` refuses and points you at `bonsai stop`.
 
+By default, `[run] mode = "concurrent"` lets multiple worktrees run tracked
+background app processes at once. Set `[run] mode = "single"` for projects that
+cannot run multiple worktrees concurrently. In single mode, `up` and
+`restart --detach` refuse when another worktree in the same workspace already
+has a live tracked process, and suggest `bonsai stop <name>` or
+`bonsai stop --all` instead of killing it automatically.
+
+Use `bonsai ps` to list tracked background app processes across every
+registered Bonsai workspace.
+
 ## Stop and Restart
 
 ```bash
@@ -64,6 +74,25 @@ process working directory. External or unknown owners are skipped unless
 
 `restart` runs the same safe stop flow, then starts the selected worktree
 in the foreground (or in the background with `--detach`).
+
+## Run Ad Hoc Commands
+
+```bash
+bonsai exec -- npm test
+bonsai exec ma-123-implement-auth -- npm test
+bonsai each -- git status --short
+bonsai each --skip-default -- npm install
+```
+
+`exec` runs an arbitrary command in one worktree with that worktree's generated
+`.env.local` values loaded. With no worktree name it uses the current worktree;
+with a worktree name it accepts the same branch, directory, or slug forms as
+`start`.
+
+`each` runs the command sequentially across the default worktree and every
+managed worktree. It keeps going after failures, prints one exit code per
+worktree, and exits non-zero if any command fails. Pass `--skip-default` when
+the command should run only in branch worktrees.
 
 ## Read Lifecycle Logs
 

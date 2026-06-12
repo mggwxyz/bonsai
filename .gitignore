@@ -11,6 +11,7 @@ dist/
 # Environments and local config
 .env
 .envrc
+.bonsai.local.toml
 
 # Local planning artifacts
 docs/superpowers/

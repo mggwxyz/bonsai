@@ -6,7 +6,8 @@ import shlex
 import signal
 import time
 from collections.abc import Mapping
-from dataclasses import replace
+from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path
 
 from bonsai.env import parse_env_content
@@ -14,17 +15,23 @@ from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
 from bonsai.logs import latest_command_log, next_command_log_path
 from bonsai.models import (
     AppDownPlan,
+    AppProcessItem,
+    AppProcessPlan,
     AppUpPlan,
     BonsaiConfig,
     BonsaiState,
     CommandLogPlan,
+    EachCommandResult,
     PortOwner,
     StopProcessItem,
     StopProcessPlan,
     WorkspacePort,
+    WorktreeCommandResult,
     WorktreeTarget,
 )
 from bonsai.process import Runner
+from bonsai.registry import read_workspace_registry
+from bonsai.rendering import standard_bonsai_env
 from bonsai.state import load_state
 from bonsai.workflows import probes
 from bonsai.workflows.inspection import (
@@ -37,6 +44,71 @@ from bonsai.workflows.shared import (
     resolve_start_target,
     run_lifecycle_command,
 )
+
+
+@dataclass(frozen=True)
+class _TrackedAppProcess:
+    record_path: Path
+    branch: str
+    pid: int
+
+
+def execute_worktree_command(
+    runner: Runner,
+    workspace_root: Path,
+    name: str | None,
+    current_path: Path,
+    argv: list[str],
+) -> WorktreeCommandResult:
+    if not argv:
+        raise BonsaiWorkspaceError("Command is required after --")
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    target = resolve_start_target(workspace_root, name, current_path)
+    exit_code = runner.run_stream(
+        argv,
+        cwd=target.worktree_path,
+        env=_start_environment(config, state, workspace_root, target),
+    )
+    return WorktreeCommandResult(
+        branch=target.branch,
+        worktree_path=target.worktree_path,
+        exit_code=exit_code,
+    )
+
+
+def execute_each_command(
+    runner: Runner,
+    workspace_root: Path,
+    current_path: Path,
+    argv: list[str],
+    *,
+    skip_default: bool = False,
+) -> EachCommandResult:
+    if not argv:
+        raise BonsaiWorkspaceError("Command is required after --")
+    _ = current_path
+    state = load_state(workspace_root / ".bonsai" / "state.json")
+    config = load_workspace_config(workspace_root, state)
+    targets = list(_configured_worktree_targets(state, workspace_root))
+    default_target = targets[:1]
+    managed_targets = sorted(targets[1:], key=lambda target: target.branch.lower())
+    selected_targets = managed_targets if skip_default else [*default_target, *managed_targets]
+    results: list[WorktreeCommandResult] = []
+    for target in selected_targets:
+        exit_code = runner.run_stream(
+            argv,
+            cwd=target.worktree_path,
+            env=_start_environment(config, state, workspace_root, target),
+        )
+        results.append(
+            WorktreeCommandResult(
+                branch=target.branch,
+                worktree_path=target.worktree_path,
+                exit_code=exit_code,
+            )
+        )
+    return EachCommandResult(items=tuple(results))
 
 
 def _stop_targets(
@@ -202,6 +274,20 @@ def _record_log_path(record: dict[str, object]) -> Path | None:
     return Path(value)
 
 
+def _record_command(record: dict[str, object]) -> tuple[str, ...]:
+    value = record.get("command")
+    if not isinstance(value, list):
+        return ()
+    return tuple(str(item) for item in value)
+
+
+def _record_branch(record: dict[str, object], fallback: str) -> str:
+    value = record.get("branch")
+    if isinstance(value, str) and value.strip():
+        return value
+    return fallback
+
+
 def _write_app_process_record(
     path: Path,
     *,
@@ -220,6 +306,10 @@ def _write_app_process_record(
                 "pid": pid,
                 "command": argv,
                 "log_path": str(log_path),
+                "started_at": datetime.now(UTC)
+                .replace(microsecond=0)
+                .isoformat()
+                .replace("+00:00", "Z"),
             },
             indent=2,
             sort_keys=True,
@@ -227,6 +317,83 @@ def _write_app_process_record(
         + "\n",
         encoding="utf-8",
     )
+
+
+def plan_app_processes() -> AppProcessPlan:
+    items: list[AppProcessItem] = []
+    for workspace in read_workspace_registry():
+        pid_dir = workspace.root / ".bonsai" / "pids"
+        if not pid_dir.exists():
+            continue
+        for path in sorted(pid_dir.glob("*.json")):
+            record = _read_app_process_record(path)
+            if not record:
+                _remove_process_record(path)
+                continue
+            pid = _record_pid(record)
+            if pid is None or not _process_is_alive(pid):
+                _remove_process_record(path)
+                continue
+            branch = record.get("branch")
+            worktree_path = record.get("worktree_path")
+            started_at = record.get("started_at")
+            items.append(
+                AppProcessItem(
+                    workspace_name=workspace.name,
+                    workspace_root=workspace.root,
+                    branch=str(branch or path.stem),
+                    worktree_path=Path(str(worktree_path or "")),
+                    pid=pid,
+                    command=_record_command(record),
+                    log_path=_record_log_path(record),
+                    started_at=str(started_at) if isinstance(started_at, str) else None,
+                )
+            )
+    return AppProcessPlan(items=tuple(items))
+
+
+def _tracked_live_app_processes(workspace_root: Path) -> tuple[_TrackedAppProcess, ...]:
+    pid_dir = workspace_root / ".bonsai" / "pids"
+    if not pid_dir.exists():
+        return ()
+
+    items: list[_TrackedAppProcess] = []
+    for path in sorted(pid_dir.glob("*.json")):
+        record = _read_app_process_record(path)
+        if not record:
+            _remove_process_record(path)
+            continue
+        pid = _record_pid(record)
+        if pid is None or not _process_is_alive(pid):
+            _remove_process_record(path)
+            continue
+        items.append(
+            _TrackedAppProcess(
+                record_path=path,
+                branch=_record_branch(record, path.stem),
+                pid=pid,
+            )
+        )
+    return tuple(items)
+
+
+def _enforce_single_run_mode(
+    config: BonsaiConfig,
+    workspace_root: Path,
+    target_record_path: Path,
+) -> None:
+    if config.run.mode != "single":
+        return
+
+    for process in _tracked_live_app_processes(workspace_root):
+        if process.record_path == target_record_path:
+            continue
+        stop_name = shlex.quote(process.branch)
+        raise BonsaiWorkspaceError(
+            "Single run mode is enabled and "
+            f"{process.branch} is already running with pid {process.pid}. "
+            f"Run: bonsai stop {stop_name} or bonsai stop --all."
+        )
 
 
 def _remove_process_record(path: Path) -> None:
@@ -257,13 +424,29 @@ def _terminate_process_id(pid: int, timeout: float) -> None:
             pass
 
 
-def _start_environment(target: WorktreeTarget) -> Mapping[str, str]:
+def _start_environment(
+    config: BonsaiConfig,
+    state: BonsaiState,
+    workspace_root: Path,
+    target: WorktreeTarget,
+) -> Mapping[str, str]:
     env_path = target.worktree_path / ".env.local"
     if not env_path.exists():
         raise BonsaiWorkspaceError(
             f"Missing generated env file at {env_path}. Run: bonsai sync --apply"
         )
-    return parse_env_content(env_path.read_text(encoding="utf-8"))
+    env = parse_env_content(env_path.read_text(encoding="utf-8"))
+    env.update(
+        standard_bonsai_env(
+            config,
+            target.branch,
+            target.worktree.slot,
+            target.worktree_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+        )
+    )
+    return env
 
 
 def _readiness_ports(config: BonsaiConfig, target: WorktreeTarget) -> tuple[int, ...]:
@@ -300,7 +483,7 @@ def execute_start(
         raise BonsaiConfigError("Missing config key commands.start")
 
     target = resolve_start_target(workspace_root, name, current_path)
-    env = _start_environment(target)
+    env = _start_environment(config, state, workspace_root, target)
     if config.commands.prestart:
         run_lifecycle_command(
             runner,
@@ -350,7 +533,7 @@ def execute_up(
         raise BonsaiConfigError("Missing config key commands.start")
 
     target = resolve_start_target(workspace_root, name, current_path)
-    env = _start_environment(target)
+    env = _start_environment(config, state, workspace_root, target)
     record_path = _app_process_record_path(workspace_root, target.worktree.slug)
     stale_pid: int | None = None
     record = _read_app_process_record(record_path)
@@ -362,6 +545,8 @@ def execute_up(
             )
         stale_pid = existing_pid
         _remove_process_record(record_path)
+
+    _enforce_single_run_mode(config, workspace_root, record_path)
 
     if config.commands.prestart:
         run_lifecycle_command(

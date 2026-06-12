@@ -13,6 +13,7 @@ rely on their shape.
 
 ```bash
 bonsai list
+bonsai list --all
 bonsai list --format json
 ```
 
@@ -20,6 +21,23 @@ The text view is a simple list of branch, path, and kind for the default
 worktree and every managed worktree. The JSON view is a full workspace
 overview with slot, generated `.env.local` status, service ports, and
 service URLs per worktree.
+
+`list --all` uses Bonsai's machine-global workspace registry and groups
+worktrees by workspace root. Workspaces self-register when Bonsai loads their
+state; stale registry entries are pruned when their `.bonsai/state.json` is
+gone. `list --all --format json` includes each workspace root so scripts can
+jump directly to the right checkout.
+
+## Background App Processes
+
+```bash
+bonsai ps
+bonsai ps --format json
+```
+
+`ps` lists tracked app processes started by `bonsai up` across every registered
+workspace. It reports workspace, worktree, PID, command, log path, and uptime
+when available. Dead PID records are pruned while reading the process list.
 
 ## Current Worktree Status
 

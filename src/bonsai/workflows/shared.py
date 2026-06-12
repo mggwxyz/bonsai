@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import shlex
+import shutil
+import subprocess
 from collections.abc import Callable, Mapping
 from pathlib import Path
 
@@ -12,6 +14,7 @@ from bonsai.models import (
     BonsaiConfig,
     BonsaiState,
     CommandSpec,
+    FileCopy,
     FileSymlink,
     FileWrite,
     ManagedWorktree,
@@ -36,14 +39,50 @@ _PREPARE_COMMAND_KINDS: tuple[LogKind, ...] = (
     "setup",
     "postsetup",
 )
+_POST_ADD_COMMAND_KINDS: tuple[LogKind, ...] = ("postadd",)
+_WORKTREEINCLUDE_NAME = ".worktreeinclude"
+_WORKTREEINCLUDE_SKIPPED_DIRS = frozenset(
+    {
+        ".cache",
+        ".gradle",
+        ".next",
+        ".nuxt",
+        ".parcel-cache",
+        ".pytest_cache",
+        ".ruff_cache",
+        ".svelte-kit",
+        ".tox",
+        ".turbo",
+        ".venv",
+        "__pycache__",
+        "bower_components",
+        "build",
+        "coverage",
+        "dist",
+        "env",
+        "node_modules",
+        "out",
+        "target",
+        "vendor",
+        "venv",
+    }
+)
 
 
 def workspace_config_path(workspace_root: Path) -> Path:
     return workspace_root / ".bonsai.toml"
 
 
+def workspace_local_config_path(workspace_root: Path) -> Path:
+    return workspace_root / ".bonsai.local.toml"
+
+
 def repo_config_path(workspace_root: Path, default_worktree: str) -> Path:
     return workspace_root / default_worktree / ".bonsai.toml"
+
+
+def repo_local_config_path(workspace_root: Path, default_worktree: str) -> Path:
+    return workspace_root / default_worktree / ".bonsai.local.toml"
 
 
 def resolve_workspace_config_path(workspace_root: Path, default_worktree: str) -> Path:
@@ -60,8 +99,27 @@ def resolve_workspace_config_path(workspace_root: Path, default_worktree: str) -
     )
 
 
+def workspace_local_config_paths(
+    workspace_root: Path,
+    default_worktree: str,
+    config_path: Path,
+) -> tuple[Path, ...]:
+    root_local = workspace_local_config_path(workspace_root)
+    if config_path == workspace_config_path(workspace_root):
+        return (root_local,)
+    return (root_local, repo_local_config_path(workspace_root, default_worktree))
+
+
 def load_workspace_config(workspace_root: Path, state: BonsaiState) -> BonsaiConfig:
-    return load_config(resolve_workspace_config_path(workspace_root, state.default_worktree))
+    config_path = resolve_workspace_config_path(workspace_root, state.default_worktree)
+    return load_config(
+        config_path,
+        local_paths=workspace_local_config_paths(
+            workspace_root,
+            state.default_worktree,
+            config_path,
+        ),
+    )
 
 
 def _safe_path_segment(value: str, label: str) -> str:
@@ -105,6 +163,9 @@ def generated_worktree_files(
     branch: str,
     slot: int,
     worktree_path: Path,
+    *,
+    workspace_root: Path | None = None,
+    default_branch: str | None = None,
 ) -> tuple[FileWrite, ...]:
     slug = branch_slug(branch)
     if slug == "":
@@ -113,13 +174,150 @@ def generated_worktree_files(
     files = [
         FileWrite(
             path=worktree_path / ".env.local",
-            content=render_env_local(config, branch, slot, worktree_path),
+            content=render_env_local(
+                config,
+                branch,
+                slot,
+                worktree_path,
+                workspace_root=workspace_root,
+                default_branch=default_branch,
+            ),
         )
     ]
-    for service_name, content in render_caddy_snippets(config, branch, slot, worktree_path).items():
+    for service_name, content in render_caddy_snippets(
+        config,
+        branch,
+        slot,
+        worktree_path,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
+    ).items():
         service_name = _safe_path_segment(service_name, "service name")
         files.append(FileWrite(path=snippets_dir / f"{slug}-{service_name}.caddy", content=content))
     return tuple(files)
+
+
+def worktreeinclude_file_copies(
+    config: BonsaiConfig,
+    default_worktree_path: Path,
+    worktree_path: Path,
+) -> tuple[FileCopy, ...]:
+    include_path = default_worktree_path / _WORKTREEINCLUDE_NAME
+    if not include_path.is_file():
+        return ()
+
+    explicit_paths = {
+        Path(path)
+        for shared_file in config.shared_files
+        for path in (shared_file.source, shared_file.target)
+    }
+    copies: list[FileCopy] = []
+    for relative_path in _worktreeinclude_relative_paths(default_worktree_path, include_path):
+        if relative_path in explicit_paths:
+            continue
+        if _is_skipped_worktreeinclude_path(relative_path):
+            continue
+        source = default_worktree_path / relative_path
+        if not source.is_file() or source.is_symlink():
+            continue
+        copies.append(FileCopy(source=source, target=worktree_path / relative_path))
+    return tuple(copies)
+
+
+def _worktreeinclude_relative_paths(
+    default_worktree_path: Path,
+    include_path: Path,
+) -> tuple[Path, ...]:
+    candidates = _git_worktreeinclude_candidates(default_worktree_path, include_path)
+    if not candidates:
+        return ()
+    ignored = _git_ignored_paths(default_worktree_path, candidates)
+    paths: list[Path] = []
+    for path in candidates:
+        if path not in ignored:
+            continue
+        if not _is_safe_relative_worktreeinclude_path(path):
+            continue
+        paths.append(path)
+    return tuple(paths)
+
+
+def _git_worktreeinclude_candidates(
+    default_worktree_path: Path,
+    include_path: Path,
+) -> tuple[Path, ...]:
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(default_worktree_path),
+                "ls-files",
+                "--others",
+                "--ignored",
+                "--exclude-from",
+                str(include_path),
+                "-z",
+            ],
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return ()
+    if result.returncode != 0:
+        return ()
+    return _decode_nul_paths(result.stdout)
+
+
+def _git_ignored_paths(default_worktree_path: Path, paths: tuple[Path, ...]) -> set[Path]:
+    if not paths:
+        return set()
+    stdin = b"".join(
+        f"{path.as_posix()}\0".encode("utf-8", errors="surrogateescape")
+        for path in paths
+    )
+    try:
+        result = subprocess.run(
+            [
+                "git",
+                "-C",
+                str(default_worktree_path),
+                "check-ignore",
+                "--stdin",
+                "-z",
+            ],
+            input=stdin,
+            capture_output=True,
+            check=False,
+        )
+    except OSError:
+        return set()
+    if result.returncode not in {0, 1}:
+        return set()
+    return set(_decode_nul_paths(result.stdout))
+
+
+def _decode_nul_paths(output: bytes) -> tuple[Path, ...]:
+    paths: list[Path] = []
+    for value in output.split(b"\0"):
+        if not value:
+            continue
+        text = value.decode("utf-8", errors="surrogateescape")
+        paths.append(Path(text))
+    return tuple(paths)
+
+
+def _is_safe_relative_worktreeinclude_path(path: Path) -> bool:
+    return (
+        path != Path()
+        and not path.is_absolute()
+        and ".." not in path.parts
+        and all(part not in {"", "."} for part in path.parts)
+    )
+
+
+def _is_skipped_worktreeinclude_path(path: Path) -> bool:
+    return any(part in _WORKTREEINCLUDE_SKIPPED_DIRS for part in path.parts)
 
 
 def resolve_managed_worktree(state: BonsaiState, name: str) -> ResolvedWorktree | None:
@@ -311,6 +509,16 @@ def apply_symlinks(symlinks: tuple[FileSymlink, ...]) -> None:
             raise BonsaiWorkspaceError(f"Shared file target already exists: {symlink.target}")
         symlink.target.parent.mkdir(parents=True, exist_ok=True)
         symlink.target.symlink_to(symlink.source)
+
+
+def apply_file_copies(copies: tuple[FileCopy, ...]) -> None:
+    for copy in copies:
+        if not copy.source.exists():
+            raise BonsaiWorkspaceError(f"Shared file source does not exist: {copy.source}")
+        if copy.target.exists() or copy.target.is_symlink():
+            continue
+        copy.target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(copy.source, copy.target)
 
 
 def command_summary(command: CommandSpec) -> str:

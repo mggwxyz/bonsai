@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 from dataclasses import replace
 from pathlib import Path
 
@@ -54,6 +55,7 @@ from bonsai.workflows.shared import (
     app_snippets_dir,
     global_caddy_paths,
     load_workspace_config,
+    worktreeinclude_file_copies,
 )
 
 
@@ -438,16 +440,46 @@ def _desired_sync_files(
             target.branch,
             target.worktree.slot,
             target.worktree_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
         )
         for service_name, content in render_caddy_snippets(
             config,
             target.branch,
             target.worktree.slot,
             target.worktree_path,
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
         ).items():
             service_name = _safe_path_segment(service_name, "service name")
             desired[snippets_dir / f"{target.worktree.slug}-{service_name}.caddy"] = content
     return desired
+
+
+def _shared_copy_actions(
+    config: BonsaiConfig,
+    state: BonsaiState,
+    workspace_root: Path,
+) -> tuple[SyncFileAction, ...]:
+    default_worktree = workspace_root / state.default_worktree
+    actions: list[SyncFileAction] = []
+    for shared_file in config.shared_files:
+        if shared_file.mode != "copy":
+            continue
+        source = default_worktree / _safe_path_segment(shared_file.source, "shared file source")
+        target_name = _safe_path_segment(shared_file.target, "shared file target")
+        for worktree in state.worktrees.values():
+            target = workspace_root / worktree.path / target_name
+            if target.exists() or target.is_symlink():
+                continue
+            actions.append(SyncFileAction(kind="copy", path=target, source=source))
+    for worktree in state.worktrees.values():
+        worktree_path = workspace_root / worktree.path
+        for copy in worktreeinclude_file_copies(config, default_worktree, worktree_path):
+            if copy.target.exists() or copy.target.is_symlink():
+                continue
+            actions.append(SyncFileAction(kind="copy", path=copy.target, source=copy.source))
+    return tuple(actions)
 
 
 def _stale_generated_snippet_actions(
@@ -496,6 +528,7 @@ def plan_sync(workspace_root: Path) -> SyncPlan:
     for path, content in sorted(desired.items(), key=lambda item: str(item[0])):
         if not path.exists() or path.read_text(encoding="utf-8") != content:
             actions.append(SyncFileAction(kind="write", path=path, content=content))
+    actions.extend(_shared_copy_actions(config, state, workspace_root))
     actions.extend(_stale_generated_snippet_actions(config, set(desired)))
     return SyncPlan(
         actions=tuple(actions),
@@ -512,6 +545,9 @@ def execute_sync(runner: Runner, workspace_root: Path, apply: bool = False) -> S
         if action.kind == "write" and action.content is not None:
             action.path.parent.mkdir(parents=True, exist_ok=True)
             action.path.write_text(action.content, encoding="utf-8")
+        elif action.kind == "copy" and action.source is not None:
+            action.path.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(action.source, action.path)
         elif action.kind == "remove":
             action.path.unlink(missing_ok=True)
     if plan.reload_caddy:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 
 from bonsai.env import parse_env_content
 from bonsai.errors import BonsaiConfigError, BonsaiWorkspaceError
@@ -36,12 +37,17 @@ def _env_file_status(target: WorktreeTarget, desired_env: str) -> str:
 def _service_summaries(
     config: BonsaiConfig,
     target: WorktreeTarget,
+    *,
+    workspace_root: Path | None = None,
+    default_branch: str | None = None,
 ) -> tuple[WorkspaceServiceSummary, ...]:
     values = template_values(
         config,
         target.branch,
         target.worktree.slot,
         target.worktree_path,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
     )
     services: list[WorkspaceServiceSummary] = []
     for service in config.services:
@@ -75,12 +81,17 @@ def build_worktree_facts(
     config: BonsaiConfig,
     target: WorktreeTarget,
     kind: str,
+    *,
+    workspace_root: Path | None = None,
+    default_branch: str | None = None,
 ) -> WorktreeFacts:
     desired_env = render_env_local(
         config,
         target.branch,
         target.worktree.slot,
         target.worktree_path,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
     )
     summary = WorktreeSummary(
         branch=target.branch,
@@ -91,7 +102,11 @@ def build_worktree_facts(
         kind=kind,
         env_file_path=target.worktree_path / ".env.local",
         env_file_status=_env_file_status(target, desired_env),
-        services=_service_summaries(config, target),
+        services=_service_summaries(
+            config,
+            target,
+            workspace_root=workspace_root,
+            default_branch=default_branch,
+        ),
     )
     return WorktreeFacts(summary=summary, generated_env=parse_env_content(desired_env))
-

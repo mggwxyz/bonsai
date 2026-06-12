@@ -17,6 +17,7 @@ from bonsai.models import (
     WorktreeTarget,
 )
 from bonsai.process import Runner
+from bonsai.registry import read_workspace_registry
 from bonsai.rendering import (
     render_caddy_snippets,
     render_root_caddyfile,
@@ -62,12 +63,22 @@ def _plan_service_open_url(
     worktree: ManagedWorktree,
     worktree_path: Path,
     service_name: str | None = None,
+    *,
+    workspace_root: Path | None = None,
+    default_branch: str | None = None,
 ) -> OpenUrlPlan:
     service = _public_url_service(config, service_name)
     if service.url is None:
         raise BonsaiConfigError("Primary public service does not have a URL")
 
-    values = template_values(config, branch, worktree.slot, worktree_path)
+    values = template_values(
+        config,
+        branch,
+        worktree.slot,
+        worktree_path,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
+    )
     try:
         url = render_template(service.url, values)
     except KeyError as exc:
@@ -145,6 +156,8 @@ def plan_open_url(
         worktree,
         worktree_path,
         service_name=service_name,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
     )
 
 
@@ -162,6 +175,8 @@ def plan_open_url_for_worktree(
         target.worktree,
         target.worktree_path,
         service_name=service_name,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
     )
 
 
@@ -173,6 +188,8 @@ def _workspace_url_checks(
     service,
     caddy_snippet_path: Path,
     port_status: WorkspacePort,
+    *,
+    default_branch: str | None = None,
 ) -> tuple[UrlCheck, ...]:
     root_caddyfile, snippets_root = global_caddy_paths()
     expected_root = render_root_caddyfile(_app_snippet_dirs(snippets_root))
@@ -182,6 +199,8 @@ def _workspace_url_checks(
         target.branch,
         target.worktree.slot,
         target.worktree_path,
+        workspace_root=workspace_root,
+        default_branch=default_branch,
     )[service.name]
 
     checks: list[UrlCheck] = []
@@ -383,6 +402,8 @@ def plan_workspace_urls(
                 target.worktree,
                 target.worktree_path,
                 service_name=service.name,
+                workspace_root=workspace_root,
+                default_branch=state.default_branch,
             )
             if diagnose_url is not None and plan.url != diagnose_url:
                 continue
@@ -405,6 +426,7 @@ def plan_workspace_urls(
                         service,
                         caddy_snippet_path,
                         port_statuses[(target.branch, service.name)],
+                        default_branch=state.default_branch,
                     ),
                 )
             )
@@ -427,9 +449,23 @@ def plan_workspace_summary(workspace_root: Path) -> WorkspaceSummary:
     targets = _configured_worktree_targets(state, workspace_root)
     default_target = targets[0]
     managed_targets = sorted(targets[1:], key=lambda target: target.branch.lower())
-    worktrees = [build_worktree_facts(config, default_target, "default").summary]
+    worktrees = [
+        build_worktree_facts(
+            config,
+            default_target,
+            "default",
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+        ).summary
+    ]
     worktrees.extend(
-        build_worktree_facts(config, target, "managed").summary
+        build_worktree_facts(
+            config,
+            target,
+            "managed",
+            workspace_root=workspace_root,
+            default_branch=state.default_branch,
+        ).summary
         for target in managed_targets
     )
     return WorkspaceSummary(
@@ -441,6 +477,10 @@ def plan_workspace_summary(workspace_root: Path) -> WorkspaceSummary:
         worktrees=tuple(worktrees),
         commands=_workspace_summary_commands(),
     )
+
+
+def plan_all_workspace_summaries() -> tuple[WorkspaceSummary, ...]:
+    return tuple(plan_workspace_summary(entry.root) for entry in read_workspace_registry())
 
 
 def plan_current_worktree_status(
@@ -474,7 +514,13 @@ def plan_current_worktree_status(
     )
     kind = "default" if branch == state.default_branch else "managed"
     target = WorktreeTarget(branch=branch, worktree=worktree, worktree_path=worktree_path)
-    facts = build_worktree_facts(config, target, kind)
+    facts = build_worktree_facts(
+        config,
+        target,
+        kind,
+        workspace_root=workspace_root,
+        default_branch=state.default_branch,
+    )
     return WorkspaceStatus(
         workspace_name=state.name,
         workspace_root=workspace_root,
